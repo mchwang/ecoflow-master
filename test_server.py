@@ -96,6 +96,14 @@ class Commands(Base):
         server.tick(at(6, 3))
         self.assertEqual(self.sent(), [True, False, True])      # back to the plan when the grid returns
 
+    def test_balancing_ignores_a_partly_learned_dpu1_profile(self):
+        s = server.fetch()[0]
+        hourly = [(at(h), 500 if 8 <= h <= 17 else 0) for h in range(1, 24)]   # sunny until 5 PM
+        partial = server.run_balance(s, server.effective(s), at(8, 30), hourly, True, {8: 0.5})   # only 8 AM learned
+        self.assertNotIn("little sun", partial["why"])
+        full = {h: 0.0001 for h in range(7, 17)}                                 # every daylight hour learned, tiny
+        self.assertIn("little sun", server.run_balance(s, server.effective(s), at(8, 30), hourly, True, full)["why"])
+
     def test_records_solar_and_level_per_dpu(self):
         server.fetch()
         server.demo["batteries"][0].update(solarWatt=420, soc=55)

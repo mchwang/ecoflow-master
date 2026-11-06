@@ -290,7 +290,10 @@ def run_balance(s, c, now, hourly, leader, dpu1_profile):
     if not cfg["bal_held"] and bats[2]["enabled"] == 0:
         return {"hold": False, "held": False, "mode": cfg["bal_mode"], "why": "DPU 2 is disabled in the EcoFlow app; leaving it alone"}
     eod = now.replace(hour=23, minute=59)
-    if dpu1_profile and hourly:  # DPU 1's own expected solar for the rest of today (Wh)
+    sun_hours = {(t - timedelta(hours=1)).hour for t, g in hourly if g and now < t and t - timedelta(hours=1) <= eod}
+    # DPU 1's own expected solar (Wh), but only once its profile covers every daylight hour left:
+    # unlearned hours would count as zero sun and release DPU 2 by mistake.
+    if dpu1_profile and hourly and sun_hours <= dpu1_profile.keys():
         sun_left, sun_min = solar_wh_hourly(now, eod, hourly, dpu1_profile, 0), cfg["bal_dpu1_left_wh"]
     else:                        # until learned: sunlight left today (Wh/m2)
         sun_left, sun_min = (solar_wh(now, eod, hourly, 1, 1) if hourly else None), cfg["bal_sun_left_wh"]

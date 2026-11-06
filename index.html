@@ -476,7 +476,7 @@ async function refresh() {
   const bl = st.balance;
   $('bal').hidden = !bl;
   if (bl) {
-    const tag = { off: 'off', 'dry-run': 'dry-run, logging only', auto: 'auto' }[bl.mode];
+    const tag = { off: 'balancing off', 'dry-run': 'balancing mode: dry-run, logging only · change in Settings', auto: 'balancing mode: auto' }[bl.mode];
     $('bal').innerHTML = `${icon(bl.held ? 'power' : 'battery')}<span><b>${bl.held ? 'DPU 2 paused' : bl.hold ? 'Would pause DPU 2' : 'Balancing ready'}</b> · ${esc(bl.why)} <span class="mute">(${tag})</span></span>`;
   }
   const sv = st.savings, money = v => (v < 0 ? '−$' : '$') + Math.abs(v).toFixed(2);
