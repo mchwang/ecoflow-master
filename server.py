@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 
 from db import DB
 from ecoflow_api import SSL_CTX, EcoFlow
-from planner import ROUND_TRIP, afternoon_sun, balance, daily_solar_kwh, deadline_of, decide, target_soc, hm12, price_at, savings, fit_array_kw, fit_hourly_kw, solar_wh, solar_wh_hourly, tou_period
+from planner import ROUND_TRIP, afternoon_sun, balance, daily_solar_kwh, deadline_of, decide, hourly_kwh, target_soc, hm12, price_at, savings, fit_array_kw, fit_hourly_kw, solar_wh, solar_wh_hourly, tou_period
 
 HERE = Path(__file__).parent
 TZ = ZoneInfo("America/Los_Angeles")
@@ -147,7 +147,11 @@ def month_savings(now, capacity_wh):
         by_day.setdefault(d, [0.0, 0.0] + v)
     db.save_daily_savings(by_day, now.timestamp())  # this month's days; earlier months stay as stored
     history = db.daily_savings()
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    hours = hourly_kwh([(datetime.fromtimestamp(ts, TZ), solar, load, grid)
+                        for ts, _, load, grid, solar, _, _ in rows if ts >= today])
     return {k: round(v, 2) for k, v in r.items()} | {
+        "hourlyToday": [[round(x, 3) for x in h] for h in hours[:now.hour + 1]],  # [solar, home, grid] kWh per hour so far
         "solarToday": [round(x, 2) for x in solar.get(now.date().isoformat(), [0.0, 0.0])],
         "allTime": round(sum(d[1] for d in history), 2), "days": len(history), "since": history[0][0] if history else None}
 
