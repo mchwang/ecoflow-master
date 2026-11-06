@@ -35,7 +35,7 @@ class Base(unittest.TestCase):
         self.addCleanup(server.db.conn.close)
         server.cfg.clear()
         server.cfg.update(server.DEFAULTS, mode="auto", margin_min=900)  # big margin: charge window open all morning
-        for k in ("leader", "holder", "lastWould", "lastBal"):
+        for k in ("leader", "holder", "lastWould", "lastBal", "onBattery"):
             server.state.pop(k, None)
         server.state["status"] = None
         p1 = mock.patch.object(server, "set_force_charge", wraps=server.set_force_charge)
@@ -83,6 +83,24 @@ class Commands(Base):
         server.tick(at(15, 1))                                  # standby now, window over
         self.assertEqual(self.sent(), [True, False])
         self.assertFalse(server.cfg["charging_by_us"])
+
+    def test_logs_when_the_battery_takes_over_the_house(self):
+        server.cfg["mode"] = "dry-run"
+        s = server.fetch()[0]
+        s.update(loadWatt=900, gridWatt=900, soc=34)            # house on grid
+        server.tick(at(10))                                      # first reading after a start: nothing logged
+        server.tick(at(10, 1))
+        taken = lambda: [l for l in server.state["log"] if "took over" in l or "back on grid" in l]
+        self.assertEqual(taken(), [])
+        s.update(gridWatt=60)                                    # battery now supplies 840 W
+        server.tick(at(10, 2))
+        self.assertEqual(len(taken()), 1); self.assertIn("Battery took over the house", taken()[0]); self.assertIn("34%", taken()[0])
+        s.update(gridWatt=800)                                   # 100 W from battery: in the gap, no change
+        server.tick(at(10, 3))
+        self.assertEqual(len(taken()), 1)
+        s.update(gridWatt=900, soc=20)                           # all from grid again
+        server.tick(at(21))
+        self.assertEqual(len(taken()), 2); self.assertIn("House back on grid", taken()[0])
 
     def test_grid_outage_stops_and_blocks_grid_charging(self):
         server.tick(at(6))                                      # charging from the grid

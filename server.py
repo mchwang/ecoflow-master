@@ -268,6 +268,7 @@ def summarize(d):
         "maxChargeSoc": q(d, "foceChargeHight"), "epsMode": q(d, "epsModeInfo"),
         "stormGuard": q(d, "stormIsEnable"), "inStorm": q(d, "inStormMode"),
         "smartBackupMode": q(d, "smartBackupMode"), "batteries": bats, "circuits": circuits,
+        "dischargeFloorSoc": q(d, "backupIncreInfo.curDischargeSoc"), "solarReserveSoc": q(d, "solarBackupReserveSoc"),
         "solarWatt": sum(b["solarWatt"] or 0 for b in bats),
     }
 
@@ -332,6 +333,20 @@ def run_balance(s, c, now, hourly, leader, dpu1_profile):
     else:
         state["lastBal"] = None
     return {"hold": hold, "held": cfg["bal_held"], "mode": cfg["bal_mode"], "why": why}
+
+
+def note_battery_use(s, now):
+    """Log when the panel switches the house between grid and battery (it decides that itself).
+    Battery supply = home load - grid draw; >150 W is on battery, <50 W on grid, in between keeps the last state."""
+    supply = (s["loadWatt"] or 0) - (s["gridWatt"] or 0)
+    was = state.get("onBattery")
+    now_on = True if supply > 150 else False if supply < 50 else was
+    state["onBattery"] = now_on
+    if was is None or now_on is None or now_on == was:
+        return  # first reading after a start, or no change
+    extra = f"battery {s['soc']:.0f}%, panel floor {s.get('dischargeFloorSoc') or 0:.0f}%, solar reserve {s.get('solarReserveSoc') or 0:.0f}%"
+    log(f"Battery took over the house at {hm12(now)} ({supply:.0f} W; {extra})" if now_on
+        else f"House back on grid at {hm12(now)} ({extra})")
 
 
 def manual_force(on, now=None):
@@ -454,6 +469,7 @@ def tick(now=None):
         else:
             state["lastWould"] = None
         bal = run_balance(s, c, now, hourly, leader, p1)
+        note_battery_use(s, now)
         period, season, price = tou_period(now)
         saved = refresh_savings(now, c["capacity_wh"])
         state["cap_wh"] = c["capacity_wh"]
