@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 
 from db import DB
 from ecoflow_api import SSL_CTX, EcoFlow
-from planner import ROUND_TRIP, afternoon_sun, balance, deadline_of, decide, target_soc, hm12, price_at, savings, fit_array_kw, solar_wh, tou_period
+from planner import ROUND_TRIP, afternoon_sun, balance, daily_solar_kwh, deadline_of, decide, target_soc, hm12, price_at, savings, fit_array_kw, fit_hourly_kw, solar_wh, solar_wh_hourly, tou_period
 
 HERE = Path(__file__).parent
 TZ = ZoneInfo("America/Los_Angeles")
@@ -79,10 +79,11 @@ DEFAULTS = {
     "bal_mode": "dry-run",       # off | dry-run | auto, separate from the charging mode until verified on the panel
     "bal_full_soc": 90,          # pause DPU 2 when DPU 1 reaches this %
     "bal_release_soc": 75,       # resume DPU 2 when DPU 1 drops to this %
-    "bal_sun_left_wh": 100,      # resume when less forecast sunlight than this (Wh/m2) is left today
+    "bal_sun_left_wh": 100,      # resume when less forecast sunlight than this (Wh/m2) is left today...
+    "bal_dpu1_left_wh": 500,     # ...or, once DPU 1's own solar is learned, less than this much DPU 1 solar (Wh)
     "bal_held": False,           # we paused DPU 2 (persisted, so we only ever resume what we paused)
 }
-NUMERIC = {"bal_full_soc", "bal_release_soc", "bal_sun_left_wh", "min_soc", "min_soc_cloudy", "sunny_after_wh", "lat", "lon", "pv_kw", "pv_pr", "capacity_wh", "charge_w", "margin_min"}
+NUMERIC = {"bal_dpu1_left_wh", "bal_full_soc", "bal_release_soc", "bal_sun_left_wh", "min_soc", "min_soc_cloudy", "sunny_after_wh", "lat", "lon", "pv_kw", "pv_pr", "capacity_wh", "charge_w", "margin_min"}
 
 _saved = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
 cfg = {k: _saved.get(k, v) for k, v in DEFAULTS.items()}  # drops settings from older versions
@@ -136,14 +137,27 @@ def month_savings(now, capacity_wh):
     if not rows:
         return None
     first_soc = rows[0][1] or 0
-    r = savings([(datetime.fromtimestamp(ts, TZ), load, grid, solar) for ts, _, load, grid, solar in rows],
+    r = savings([(datetime.fromtimestamp(ts, TZ), load, grid, solar) for ts, _, load, grid, solar, _, _ in rows],
                 now.replace(hour=0, minute=0, second=0, microsecond=0),
                 initial_kwh=first_soc / 100 * capacity_wh / 1000,
                 initial_cost_per_kwh=price_at(month_start.replace(hour=1)) / ROUND_TRIP)  # unknown origin: assume off-peak grid
-    db.save_daily_savings(r.pop("by_day"), now.timestamp())  # this month's days; earlier months stay as stored
+    solar = daily_solar_kwh([(datetime.fromtimestamp(ts, TZ), s1, s2) for ts, *_, s1, s2 in rows])
+    by_day = {d: v + solar.get(d, [0.0, 0.0]) for d, v in r.pop("by_day").items()}
+    for d, v in solar.items():
+        by_day.setdefault(d, [0.0, 0.0] + v)
+    db.save_daily_savings(by_day, now.timestamp())  # this month's days; earlier months stay as stored
     history = db.daily_savings()
     return {k: round(v, 2) for k, v in r.items()} | {
+        "solarToday": [round(x, 2) for x in solar.get(now.date().isoformat(), [0.0, 0.0])],
         "allTime": round(sum(d[1] for d in history), 2), "days": len(history), "since": history[0][0] if history else None}
+
+
+def dpu_profiles(now, max_soc):
+    """Per-DPU solar learned per hour of day from the last HISTORY_DAYS (see planner.fit_hourly_kw)."""
+    rows = [(datetime.fromtimestamp(ts, TZ).hour, s1, s2, c1, c2, g)
+            for ts, s1, s2, c1, c2, g in db.dpu_samples(now.timestamp() - HISTORY_DAYS * 86400)]
+    return (fit_hourly_kw([(h, s1, g, c1) for h, s1, _, c1, _, g in rows], max_soc),
+            fit_hourly_kw([(h, s2, g, c2) for h, _, s2, _, c2, g in rows], max_soc))
 
 
 def learned_kw(now, max_soc):
@@ -253,15 +267,19 @@ def set_dpu2(enabled):
     log(f"Sent DPU 2 {'resume' if enabled else 'pause'}: {params}")
 
 
-def run_balance(s, c, now, hourly, leader):
+def run_balance(s, c, now, hourly, leader, dpu1_profile):
     bats = {b["n"]: b for b in s["batteries"]}
     if 1 not in bats or 2 not in bats:
         return None
     if not cfg["bal_held"] and bats[2]["enabled"] == 0:
         return {"hold": False, "held": False, "mode": cfg["bal_mode"], "why": "DPU 2 is disabled in the EcoFlow app; leaving it alone"}
-    sun_left = solar_wh(now, now.replace(hour=23, minute=59), hourly, 1, 1) if hourly else None
+    eod = now.replace(hour=23, minute=59)
+    if dpu1_profile and hourly:  # DPU 1's own expected solar for the rest of today (Wh)
+        sun_left, sun_min = solar_wh_hourly(now, eod, hourly, dpu1_profile, 0), cfg["bal_dpu1_left_wh"]
+    else:                        # until learned: sunlight left today (Wh/m2)
+        sun_left, sun_min = (solar_wh(now, eod, hourly, 1, 1) if hourly else None), cfg["bal_sun_left_wh"]
     grid_charging = cfg["charging_by_us"] or any(b["forceCharge"] == "FORCE_CHARGE_ON" for b in bats.values())
-    hold, why = balance(bats[1]["soc"], bool(s["gridOnline"]), grid_charging, sun_left, cfg["bal_held"], c)
+    hold, why = balance(bats[1]["soc"], bool(s["gridOnline"]), grid_charging, sun_left, sun_min, cfg["bal_held"], c)
     if hold != cfg["bal_held"] and cfg["bal_mode"] != "off":
         if cfg["bal_mode"] == "auto" and leader:
             set_dpu2(not hold)
@@ -314,16 +332,22 @@ def get_weather():
         return None
     if weather["key"] != key or time.time() - weather["at"] > 1800:
         url = "https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode({
-            "latitude": cfg["lat"], "longitude": cfg["lon"], "timezone": "America/Los_Angeles", "forecast_days": 2,
-            "hourly": "shortwave_radiation,cloud_cover", "daily": "sunrise,sunset"})
+            "latitude": cfg["lat"], "longitude": cfg["lon"], "timezone": "America/Los_Angeles",
+            "past_days": 1, "forecast_days": 2,  # past hours come back as Open-Meteo's after-the-fact estimate
+            "hourly": "shortwave_radiation,direct_radiation,diffuse_radiation,cloud_cover,temperature_2m",
+            "daily": "sunrise,sunset"})
         try:
             with urllib.request.urlopen(url, timeout=20, context=SSL_CTX) as r:
                 d = json.load(r)
             h = d["hourly"]
+            times = [datetime.fromisoformat(t).replace(tzinfo=TZ) for t in h["time"]]
+            db.save_weather(list(zip((t.timestamp() for t in times), h["shortwave_radiation"], h["direct_radiation"],
+                                     h["diffuse_radiation"], h["cloud_cover"], h["temperature_2m"])), time.time())
+            today = datetime.now(TZ).date().isoformat()
+            i = d["daily"]["time"].index(today) if today in d["daily"]["time"] else 0
             weather.update(at=time.time(), key=key, error=None, data={
-                "hourly": [(datetime.fromisoformat(t).replace(tzinfo=TZ), ghi, cc)
-                           for t, ghi, cc in zip(h["time"], h["shortwave_radiation"], h["cloud_cover"])],
-                "sunrise": d["daily"]["sunrise"][0][11:], "sunset": d["daily"]["sunset"][0][11:]})
+                "hourly": list(zip(times, h["shortwave_radiation"], h["cloud_cover"])),
+                "sunrise": d["daily"]["sunrise"][i][11:], "sunset": d["daily"]["sunset"][i][11:]})
         except Exception as e:  # keep the last forecast; with none, solar counts as 0 (charges more, never less)
             weather.update(at=time.time(), error=f"Weather: {type(e).__name__}: {e}")
     return weather["data"]
@@ -341,7 +365,9 @@ def tick(now=None):
         deadline = deadline_of(now, c)
         hourly = [(t, ghi or 0) for t, ghi, _ in w["hourly"]] if w else []
         ghi_now = next((g for t, g in hourly if t - timedelta(hours=1) <= now < t), 0)
-        db.add_reading(now.timestamp(), s["soc"], s["solarWatt"], s["loadWatt"], s["gridWatt"], ghi_now, cfg["charging_by_us"])
+        b = {x["n"]: x for x in s["batteries"]}
+        db.add_reading(now.timestamp(), s["soc"], s["solarWatt"], s["loadWatt"], s["gridWatt"], ghi_now, cfg["charging_by_us"],
+                       *(b.get(n, {}).get("solarWatt") for n in (1, 2)), *(b.get(n, {}).get("soc") for n in (1, 2)))
         fit_kw, fit_n = learned_kw(now, c["max_soc"])
         if fit_n >= MIN_SAMPLES:
             c["pv_kw"], c["pv_pr"], c["pv_source"] = round(fit_kw, 2), 1.0, f"learned from {fit_n} readings"
@@ -349,7 +375,13 @@ def tick(now=None):
             c["pv_source"] = f"manual setting (learning: {fit_n}/{MIN_SAMPLES} readings)"
         c["sun_after_wh"] = afternoon_sun(now, c, hourly)
         c["min_soc"], c["target_why"] = target_soc(c, c["sun_after_wh"])
-        pv_wh = solar_wh(now, deadline, hourly, c["pv_kw"], c["pv_pr"]) if c["pv_kw"] else 0.0
+        p1, p2 = dpu_profiles(now, c["max_soc"])
+        profile = {h: p1[h] + p2[h] for h in p1.keys() & p2.keys()}  # hours both DPUs have learned
+        fallback_kw = c["pv_kw"] * c["pv_pr"]
+        c["profile_hours"] = [len(p1), len(p2)]
+        if profile:
+            c["pv_source"] += f"; per-DPU hourly profile for {len(profile)} h"
+        pv_wh = solar_wh_hourly(now, deadline, hourly, profile, fallback_kw)
         d = decide(now, s["soc"], c, pv_wh, cfg["charging_by_us"])
         if now.timestamp() < cfg["manual_off_until"] and d["kind"] in ("planned", "charging"):
             d = {**d, "kind": "manual", "charge": False, "reason": "You turned grid charging off by hand; it stays off for today"}
@@ -370,11 +402,11 @@ def tick(now=None):
                 state["lastWould"] = msg
         else:
             state["lastWould"] = None
-        bal = run_balance(s, c, now, hourly, leader)
+        bal = run_balance(s, c, now, hourly, leader, p1)
         period, season, price = tou_period(now)
         saved = month_savings(now, c["capacity_wh"])
         # Open-Meteo values are the mean of the hour ending at t, so label each bar with the hour it covers.
-        forecast = [{"hour": f"{t - timedelta(hours=1):%H}", "cloud": cc, "ghi": round(ghi or 0), "kw": round((ghi or 0) / 1000 * c["pv_kw"] * c["pv_pr"], 2)}
+        forecast = [{"hour": f"{t - timedelta(hours=1):%H}", "cloud": cc, "ghi": round(ghi or 0), "kw": round((ghi or 0) / 1000 * profile.get((t - timedelta(hours=1)).hour, fallback_kw), 2)}
                     for t, ghi, cc in (w["hourly"] if w else []) if (t - timedelta(hours=1)).date() == now.date() and (ghi or 0) > 0]
         state.update(status=s, raw=raw, error=weather["error"], updated=now.isoformat(timespec="seconds"), decision={
             "charge": charge, "kind": d["kind"], "reason": reason, "startAt": start_at and start_at.strftime("%H:%M"),
@@ -481,7 +513,8 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         elif self.path == "/api/savings":  # daily history: [{day, saved, kwh}]
-            self._json([{"day": d, "saved": round(v, 2), "kwh": round(k, 2)} for d, v, k in db.daily_savings()])
+            self._json([{"day": d, "saved": round(v, 2), "kwh": round(k, 2), "solar1_kwh": round(s1 or 0, 2),
+                         "solar2_kwh": round(s2 or 0, 2)} for d, v, k, s1, s2 in db.daily_savings()])
         elif self.path == "/api/state":
             self._json({**state, "config": cfg, "demo": DEMO})
         else:

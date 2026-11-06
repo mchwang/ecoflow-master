@@ -27,6 +27,8 @@ Settings are saved to `config.json`. The EV2-A prices in `planner.py` are the 20
 - `homepower.db` (SQLite):
   - `readings`: one row per minute with battery %, solar W, load W, grid W, forecast sunlight, and whether grid charging is on
   - `events`: the activity log
+  - `readings` also stores each DPU's solar watts and battery % (`solar1_w`, `solar2_w`, `soc1`, `soc2`). The two arrays face different ways, so each DPU's solar is learned **per hour of day**. Once both DPUs have 20+ sunny minutes in an hour (over 14 days), that hour's profile replaces the combined estimate in the 3 PM forecast, and balancing uses DPU 1's own expected solar.
+  - `weather_hourly`: Open-Meteo per hour (total/direct/diffuse sunlight, cloud %, temperature). Past hours are refreshed with Open-Meteo's after-the-fact estimate, and the learning matches readings to these.
   - `daily_savings`: one row per day with dollars saved and kWh the system delivered to the house. This month is recalculated every minute from `readings`; earlier months stay as stored. `GET /api/savings` returns the history.
 - `config.json`: dashboard settings and automation state.
 

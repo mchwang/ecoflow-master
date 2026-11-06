@@ -84,6 +84,14 @@ class Commands(Base):
         self.assertEqual(self.sent(), [True, False])
         self.assertFalse(server.cfg["charging_by_us"])
 
+    def test_records_solar_and_level_per_dpu(self):
+        server.fetch()
+        server.demo["batteries"][0].update(solarWatt=420, soc=55)
+        server.demo["batteries"][1].update(solarWatt=1300, soc=40)
+        server.tick(at(10))
+        self.assertEqual(server.db.readings_since(0)[-1][5:], (420, 1300))
+        self.assertEqual(server.db.conn.execute("SELECT soc1, soc2 FROM readings").fetchone(), (55, 40))
+
     def test_balancing_pauses_dpu2_only_in_auto(self):
         server.cfg.update(margin_min=30, bal_mode="dry-run")    # no grid charge at 1 AM
         server.fetch()

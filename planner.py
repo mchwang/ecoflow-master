@@ -30,18 +30,24 @@ def deadline_of(now, cfg):
 
 
 def solar_wh(now, until, hourly, pv_kw, pr):
-    """Expected PV energy between now and `until`.
+    """Expected PV energy (Wh) between now and `until` for one array size (kW at 1000 W/m2) x performance ratio.
 
     hourly: [(end_of_hour datetime, irradiance W/m2)], Open-Meteo style (value = mean of the preceding hour).
     Irradiance already reflects clouds and is 0 after sunset, so this covers "daylight left" too.
     shortcut: horizontal irradiance x array kW x performance ratio; tilt/orientation is folded into pr.
     """
+    return solar_wh_hourly(now, until, hourly, {}, pv_kw * pr)
+
+
+def solar_wh_hourly(now, until, hourly, kw_by_hour, fallback_kw):
+    """Like solar_wh, but with a learned effective kW per hour of day (captures which way panels face:
+    a morning array has high kW at 9 AM and low at 4 PM). Hours not in kw_by_hour use fallback_kw."""
     total = 0.0
     for end, ghi in hourly:
         start = end - timedelta(hours=1)
         overlap = (min(end, until) - max(start, now)).total_seconds() / 3600
         if overlap > 0:
-            total += ghi / 1000 * pv_kw * 1000 * pr * overlap
+            total += ghi * kw_by_hour.get(start.hour, fallback_kw) * overlap
     return total
 
 
@@ -105,6 +111,33 @@ def fit_array_kw(samples, max_soc, min_ghi=50):
     return (sum(w for w, _ in used) / total_ghi if total_ghi else 0.0), len(used)
 
 
+def fit_hourly_kw(samples, max_soc, min_ghi=50, min_n=20):
+    """One DPU's solar array, learned per hour of day: {hour: effective kW at 1000 W/m2}.
+
+    samples: [(hour, solar_w, ghi, soc)]. Same filters as fit_array_kw (dim light, battery near full).
+    Only hours with at least min_n usable readings (20 minutes of that hour) are returned.
+    """
+    acc = {}
+    for h, w, g, soc in samples:
+        if w is not None and g and g >= min_ghi and soc is not None and soc < max_soc - 1:
+            a = acc.setdefault(h, [0.0, 0.0, 0])
+            a[0] += w; a[1] += g; a[2] += 1
+    return {h: a[0] / a[1] for h, a in acc.items() if a[2] >= min_n}
+
+
+def daily_solar_kwh(rows, max_gap_s=300):
+    """rows: [(datetime, solar1_w, solar2_w)] in time order -> {"YYYY-MM-DD": [kwh1, kwh2]}.
+    Each reading holds until the next; gaps longer than max_gap_s are not counted."""
+    out = {}
+    for (t, w1, w2), (t_next, *_) in zip(rows, rows[1:]):
+        dt_s = (t_next - t).total_seconds()
+        if 0 < dt_s <= max_gap_s and (w1 is not None or w2 is not None):
+            day = out.setdefault(t.date().isoformat(), [0.0, 0.0])
+            day[0] += (w1 or 0) * dt_s / 3.6e6
+            day[1] += (w2 or 0) * dt_s / 3.6e6
+    return out
+
+
 ROUND_TRIP = 0.8  # battery charge + discharge efficiency: 1 kWh in -> 0.8 kWh back out
 
 
@@ -153,19 +186,20 @@ def savings(rows, day_start, initial_kwh=0.0, initial_cost_per_kwh=None, max_gap
     return out
 
 
-def balance(dpu1_soc, grid_online, grid_charging, sun_left_wh, held, cfg):
+def balance(dpu1_soc, grid_online, grid_charging, sun_left, sun_min, held, cfg):
     """Should DPU 2 be paused so the house drains DPU 1 first?
 
     DPU 1 (bigger, sunnier in the afternoon) nearly full -> pause DPU 2 so DPU 1 makes room for its
     afternoon solar instead of wasting it. Safety releases win over everything: grid down (need full
     backup), our grid charge running (charge both), DPU 1 drained to the release level, or no
-    meaningful sun left today. Returns (hold, reason).
+    meaningful sun left today (sun_left below sun_min; None = unknown, rule runs on levels).
+    Returns (hold, reason).
     """
     if not grid_online:
         return False, "grid is down: both batteries available for backup"
     if grid_charging:
         return False, "grid charging: both batteries charge"
-    if sun_left_wh is not None and sun_left_wh < cfg["bal_sun_left_wh"]:
+    if sun_left is not None and sun_left < sun_min:
         return False, "little sun left today: nothing to make room for"
     if held:
         if dpu1_soc <= cfg["bal_release_soc"]:
