@@ -160,8 +160,15 @@
   td, th { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; white-space:nowrap; }
   th { color:var(--mute); font-weight:500; font-size:13px; }
   td.r, th.r { text-align:right; }
-  td .mini { display:inline-block; vertical-align:middle; width:80px; height:6px; border-radius:3px; background:var(--track); overflow:hidden; margin-left:8px; }
-  td .mini i { display:block; height:100%; background:var(--home); border-radius:3px; transition:width .6s ease-out; }
+  .circuits { list-style:none; margin:0; padding:0; display:grid; column-gap:32px; }
+  @media (min-width:760px) { .circuits { grid-template-columns:1fr 1fr; grid-auto-flow:column; grid-template-rows:repeat(var(--rows, 6), auto); } }
+  .circuits li { display:grid; grid-template-columns:24px minmax(0, 1fr) auto auto auto; gap:8px; align-items:center; padding:7px 2px;
+                 border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; }
+  .circuits .n { color:var(--mute); font-size:13px; } .circuits .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .circuits .mini { margin-left:0; }
+  @media (max-width:759px) { .circuits .mini { width:36px; } .circuits li { gap:6px; } }
+  .mini { display:inline-block; vertical-align:middle; width:80px; height:6px; border-radius:3px; background:var(--track); overflow:hidden; margin-left:8px; }
+  .mini i { display:block; height:100%; background:var(--home); border-radius:3px; transition:width .6s ease-out; }
   .pill { display:inline-flex; align-items:center; gap:5px; font-size:12px; padding:2px 8px; border-radius:999px; background:var(--track); }
   .pill.on { color:var(--ok); background:color-mix(in srgb, var(--ok) 15%, transparent); }
   ul.log { margin:0; padding:0; list-style:none; display:grid; gap:8px; color:var(--mute); font-size:13px; max-height:230px; overflow:auto; align-content:start; }
@@ -337,7 +344,7 @@
     <p class="caption">kWh per hour today, from the readings taken every minute. Hover a bar for its value; each chart has its own scale.</p>
   </section>
 
-  <section class="card"><h2><svg class="ic sm"><use href="#i-list"/></svg>Circuits</h2><div class="table"><table id="circuits"></table></div></section>
+  <section class="card"><h2><svg class="ic sm"><use href="#i-list"/></svg>Circuits</h2><ul class="circuits" id="circuits"></ul></section>
   <details class="card"><summary><svg class="ic sm"><use href="#i-gauge"/></svg>Panel settings</summary><div class="table"><table id="settings" class="compact"></table></div></details>
   <details class="card"><summary><svg class="ic sm"><use href="#i-code"/></svg>All raw panel data</summary><pre id="raw"></pre></details>
 </main>
@@ -514,10 +521,10 @@ async function refresh() {
   $('settings').innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td class="r">${esc(v)}</td></tr>`).join('');
 
   const cmax = Math.max(1, ...s.circuits.map(c => c.watt || 0));
-  $('circuits').innerHTML = '<tr><th>#</th><th>Circuit</th><th class="r">Power</th><th>State</th></tr>' +
-    s.circuits.map(c => `<tr><td>${c.ch}</td><td>${esc(c.name)}</td>
-      <td class="r">${w(c.watt)}<span class="mini" aria-hidden="true"><i style="width:${Math.round((c.watt || 0) / cmax * 100)}%"></i></span></td>
-      <td>${c.on == null ? '–' : on(c.on) ? '<span class="pill on"><span class="dot"></span>On</span>' : '<span class="pill">Off</span>'}</td></tr>`).join('');
+  $('circuits').style.setProperty('--rows', Math.ceil(s.circuits.length / 2));  // two columns, read top to bottom
+  $('circuits').innerHTML = s.circuits.map(c => `<li><span class="n">${c.ch}</span><span class="nm" title="${esc(c.name)}">${esc(c.name)}</span>
+      <span class="num">${w(c.watt)}</span><span class="mini" aria-hidden="true"><i style="width:${Math.round((c.watt || 0) / cmax * 100)}%"></i></span>
+      ${c.on == null ? '<span>–</span>' : on(c.on) ? '<span class="pill on"><span class="dot"></span>On</span>' : '<span class="pill">Off</span>'}</li>`).join('');
 
   const logIcon = l => /force charge ON/i.test(l) ? 'bolt-batt' : /force charge OFF/i.test(l) ? 'power' : /control|standby/i.test(l) ? 'shield' : /Settings/.test(l) ? 'sliders' : 'activity';
   $('log').innerHTML = st.log.map(l => `<li>${icon(logIcon(l))}<span>${esc(l)}</span></li>`).join('') || '<li>No actions yet</li>';
