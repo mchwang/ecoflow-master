@@ -295,8 +295,6 @@
     </div>
 
       <form id="cfg" onsubmit="saveCfg(event)" novalidate hidden>
-        <label class="field">Cheap window starts<input name="offpeak_start" type="time"></label>
-        <label class="field">Deadline (price rises)<input name="offpeak_end" type="time"></label>
         <label class="field">Minimum % by deadline<small>When the afternoon is sunny</small><input name="min_soc" type="number" min="10" max="100"></label>
         <label class="field">Minimum % if no afternoon sun<small>Little or no sun after the deadline</small><input name="min_soc_cloudy" type="number" min="10" max="100"></label>
         <label class="field">Sunny if afternoon sunlight ≥<small>Wh/m² from the deadline to sunset (300 typical)</small><input name="sunny_after_wh" type="number" min="0" step="50"></label>
@@ -427,6 +425,7 @@ async function refresh() {
       outside: ['No grid charging now', `Power costs more until ${t12(e.offpeak_start)}. It only grid-charges from ${t12(e.offpeak_start)} to ${end}.`],
       ok: ['On track, no grid charge needed', `${sol}, so the battery should reach ${d.projectedSoc}% by ${end}. Target is ${e.min_soc}% (${e.target_why}).`],
       planned: [`Grid charge at ${d.startAt ? t12(d.startAt) : '–'}`, `${sol}, so the battery would only reach ${d.projectedSoc}% by ${end}. It needs ${e.min_soc}% (${e.target_why}).`],
+      manual: ['Grid charging off (by you)', `You turned grid charging off by hand, so it stays off for the rest of today's cheap window. Use Force charge on to resume.`],
       charging: ['Grid charging now', `Charging so the battery reaches ${e.min_soc}% by ${end} (${e.target_why}). Without the grid it would reach ${d.projectedSoc}%.`],
     }[d.kind] || [d.charge ? 'Grid charging' : 'Not charging', d.reason];
     $('stitle').textContent = title;

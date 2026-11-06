@@ -70,7 +70,7 @@ class Balance(unittest.TestCase):
     C = {"bal_full_soc": 90, "bal_release_soc": 75, "bal_sun_left_wh": 100}
 
     def b(self, d1, held=False, grid=True, charging=False, sun=1000):
-        return balance(d1, 50, grid, charging, sun, held, self.C)[0]
+        return balance(d1, grid, charging, sun, held, self.C)[0]
 
     def test_pause_when_dpu1_nearly_full_and_hold_until_release(self):
         self.assertFalse(self.b(85))
