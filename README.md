@@ -36,6 +36,7 @@ The solar learning reads the last 14 days of `readings`. Growth is about 0.5M ro
    - `ECOFLOW_SN` (optional)
    - `DASHBOARD_PASSWORD`: a long random string. **Required**: the container refuses to start without it.
    - `DASHBOARD_USER` (optional, default `admin`)
+   - `ECOFLOW_HOST` (optional): defaults to `https://api-a.ecoflow.com`, the Americas region. Use `https://api-e.ecoflow.com` for a Europe account. Don't use the global `api.ecoflow.com`: it routes by the server's location, so a VPS outside the US gets the Europe server, which rejects US keys with `8513 accessKey is invalid`.
 3. Persistent storage: add a volume mounted at **`/data`**. Use a volume, not a host bind mount: the app runs as a non-root user and needs to write there.
 4. Health check path: `/healthz`. It's the only URL that works without a login.
 5. Set a domain so Coolify's proxy serves it over HTTPS. Basic auth over plain HTTP would expose the password.
