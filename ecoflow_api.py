@@ -54,7 +54,11 @@ class EcoFlow:
         with urllib.request.urlopen(req, timeout=20, context=SSL_CTX) as r:
             res = json.load(r)
         if str(res.get("code")) != "0":
-            raise RuntimeError(f"EcoFlow API error {res.get('code')}: {res.get('message')}")
+            hint = ""
+            if str(res.get("code")) == "8513":  # wrong key: show a fingerprint to compare with the working copy, never the key
+                hint = (f" (host {self.host}; access key len={len(self.ak)} starts={self.ak[:2]!r}"
+                        f" sha256={hashlib.sha256(self.ak.encode()).hexdigest()[:10]})")
+            raise RuntimeError(f"EcoFlow API error {res.get('code')}: {res.get('message')}{hint}")
         return res.get("data")
 
     def devices(self):
