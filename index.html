@@ -102,7 +102,13 @@
   .batt .meta span { display:inline-flex; align-items:center; gap:4px; }
   .batt .pct { font-size:22px; font-weight:700; }
 
-  .status { display:flex; gap:12px; align-items:flex-start; margin-bottom:14px; }
+  .status { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-start; margin-bottom:14px; }
+  .status > div:nth-child(2) { flex:1 1 320px; min-width:0; }
+  .goal { flex:0 1 300px; margin-left:auto; border:1px solid var(--line); border-radius:12px; padding:10px 14px; background:var(--card2); }
+  .goal .label { color:var(--mute); font-size:13px; display:block; } .goal b { display:block; font-size:26px; }
+  .goalbar { position:relative; height:8px; border-radius:4px; background:var(--track); margin-top:8px; }
+  .goalbar i { position:absolute; inset:0 auto 0 0; border-radius:4px; background:var(--c, var(--warn)); transition:width .6s ease-out; }
+  .goalbar em { position:absolute; top:-4px; bottom:-4px; width:2px; background:var(--fg); border-radius:1px; }
   .headline { font-size:18px; }
   .why { margin:4px 0 0; color:var(--fg); opacity:.8; font-size:15px; max-width:70ch; }
   .status .badge { margin-top:-4px; }
@@ -289,10 +295,11 @@
   <section class="card" aria-labelledby="sc-h">
     <h2 id="sc-h"><svg class="ic sm"><use href="#i-zap"/></svg>Smart charge · PG&amp;E EV2-A</h2>
     <div class="status" aria-live="polite"><span class="badge" id="sbadge"><svg class="ic"><use id="sicon" href="#i-bolt-batt"/></svg></span>
-      <div><div class="row" style="gap:10px"><b id="stitle" class="headline">–</b><span class="chip" id="smode"></span></div><p id="sreason" class="why"></p></div></div>
+      <div><div class="row" style="gap:10px"><b id="stitle" class="headline">–</b><span class="chip" id="smode"></span></div><p id="sreason" class="why"></p></div>
+      <div class="goal"><span class="label" id="proj-l">Expected by deadline (no grid)</span><b class="num" id="proj">–</b>
+        <div class="goalbar" aria-hidden="true"><i id="proj-fill"></i><em id="proj-mark"></em></div></div></div>
 
     <div class="facts">
-      <div class="fact"><svg class="ic"><use href="#i-target"/></svg><div><span class="label" id="proj-l">Expected by deadline (no grid)</span><b class="num" id="proj">–</b></div></div>
       <div class="fact"><svg class="ic"><use href="#i-sun"/></svg><div><span class="label">Solar before deadline</span><b class="num" id="pvkwh">–</b><span class="mute" style="font-size:13px" id="pv-sub"></span></div></div>
       <div class="fact"><svg class="ic"><use href="#i-panel"/></svg><div><span class="label">Solar array</span><b class="num" id="array">–</b><span class="mute" style="font-size:13px" id="arraysrc"></span></div></div>
       <div class="fact"><svg class="ic"><use href="#i-sunrise"/></svg><div><span class="label">Daylight</span><b class="num" id="sun">–</b><span class="mute" style="font-size:13px" id="sun-after"></span></div></div>
@@ -518,6 +525,9 @@ async function refresh() {
     $('proj-l').textContent = `Expected by ${t12(e.offpeak_end)} (no grid)`;
     $('proj').innerHTML = `${d.projectedSoc}% <span class="mute" style="font-size:14px;font-weight:400">min ${e.min_soc}%</span>`;
     $('proj').className = 'num ' + (d.projectedSoc >= e.min_soc ? 'ok' : 'warn');
+    $('proj-fill').style.width = Math.min(100, d.projectedSoc) + '%';
+    $('proj-fill').style.setProperty('--c', d.projectedSoc >= e.min_soc ? 'var(--ok)' : 'var(--warn)');
+    $('proj-mark').style.left = `calc(${e.min_soc}% - 1px)`; $('proj-mark').title = `Target ${e.min_soc}%`;
     $('pvkwh').textContent = `${d.solarKwh} kWh`;
     $('pv-sub').textContent = `Home uses ~${d.homeKwh} kWh by ${end}` + (d.wastedKwh > 0 ? ` · ~${d.wastedKwh} kWh wasted (battery full)` : '');
     $('array').textContent = e.pv_kw ? `${e.pv_kw} kW` : 'Not set';
