@@ -509,10 +509,8 @@ function stream(id, watts, reverse = false) {
 
 function drawFlow(s, d) {
   const solar = s.solarWatt || 0, grid = s.gridWatt || 0, load = s.loadWatt || 0;
-  const gridCharging = s.batteries.some(b => b.enabled !== 0 && on(b.forceCharge));
   const net = solar + (s.gridOnline ? grid : 0) - load;  // into the batteries (+) or out (-); matches panel channel W + solar
-  const discharging = !s.gridOnline || load - grid > 50;
-  const charging = !discharging && (gridCharging || solar > 5);
+  const discharging = net < -50, charging = net > 50;     // 50 W dead band: meter noise reads as idle
   stream('s-solar', solar, false);                  // solar -> hub
   stream('s-grid', s.gridOnline ? grid : 0, false); // grid -> hub
   stream('s-home', load, false);                    // hub -> home
