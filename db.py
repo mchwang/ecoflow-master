@@ -69,13 +69,12 @@ class DB:
                     " solar1_w, solar2_w, soc1, soc2, remain_wh) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     (int(ts), soc, solar_w, load_w, grid_w, forecast_ghi, int(bool(charging)), solar1_w, solar2_w, soc1, soc2, remain_wh))
 
-    def stored_wh(self, since_ts, until_ts):
-        """((first_ts, wh), (last_ts, wh)) of battery energy recorded in [since, until), or None if fewer than two
-        readings have it. The panel reports it to the Wh; the % level is whole numbers only (1% = ~300 Wh here)."""
+    def battery_wh(self, since_ts, until_ts):
+        """{ts: battery energy in Wh} for readings in [since, until) that recorded it. The panel reports it to
+        the Wh; the % level is whole numbers only (1% = ~300 Wh on a 30 kWh system)."""
         with self.lock:
-            rows = self.conn.execute("SELECT ts, remain_wh FROM readings WHERE ts >= ? AND ts < ? AND remain_wh IS NOT NULL ORDER BY ts",
-                                     (int(since_ts), int(until_ts))).fetchall()
-        return (rows[0], rows[-1]) if len(rows) >= 2 else None
+            return dict(self.conn.execute("SELECT ts, remain_wh FROM readings WHERE ts >= ? AND ts < ? AND remain_wh IS NOT NULL",
+                                          (int(since_ts), int(until_ts))).fetchall())
 
     def save_weather(self, rows, now):
         """rows: [(hour_end_ts, ghi, direct, diffuse, cloud, temp)]; newer fetches replace older ones."""
