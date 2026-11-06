@@ -53,6 +53,10 @@ class DB:
                 for col in cols:
                     if col.split()[0] not in have:
                         self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
+            if self.conn.execute("PRAGMA user_version").fetchone()[0] < 1:
+                # Solar before version 1 was read from the wrong panel field (~3 W): drop it so learning starts clean.
+                self.conn.execute("UPDATE readings SET solar_w = NULL, solar1_w = NULL, solar2_w = NULL")
+                self.conn.execute("PRAGMA user_version = 1")
             self.conn.commit()
 
     def _write(self, sql, args):
