@@ -117,11 +117,12 @@
   .fc .after { opacity:.4; }
   .fc .cloud { display:inline-flex; align-items:center; gap:2px; }
   .caption { color:var(--mute); font-size:12px; margin:0 0 12px; }
-  .hr .col { min-width:40px; }
-  .hr .trio { display:flex; gap:2px; align-items:flex-end; height:96px; }
-  .hr i { width:9px; background:var(--c); border-radius:3px 3px 1px 1px; }
-  .key { display:inline-block; width:10px; height:10px; border-radius:3px; background:var(--c); margin:0 4px 0 8px; vertical-align:-1px; }
-  .key:first-child { margin-left:0; }
+  .hrblock { margin-bottom:14px; }
+  .hrhead { display:flex; align-items:center; gap:8px; color:var(--mute); font-size:13px; margin-bottom:4px; }
+  .hrhead .ic { color:var(--c); } .hrhead b { color:var(--fg); font-size:16px; }
+  .fc.hr { min-height:96px; }
+  .hr .col { min-width:40px; } .hr .kw { font-size:11px; }
+  .hr i { width:22px; background:var(--c); }
 
   .controls { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; border-top:1px solid var(--line); padding-top:14px; }
   .seg { display:inline-flex; border:1px solid var(--input); border-radius:10px; overflow:hidden; }
@@ -325,13 +326,13 @@
 
   <section class="card" aria-labelledby="td-h">
     <h2 id="td-h"><svg class="ic sm"><use href="#i-activity"/></svg>Today</h2>
-    <div class="facts">
-      <div class="fact"><svg class="ic" style="color:var(--solar)"><use href="#i-sun"/></svg><div><span class="label">Solar generated</span><b class="num" id="td-solar">–</b></div></div>
-      <div class="fact"><svg class="ic" style="color:var(--home)"><use href="#i-home"/></svg><div><span class="label">Home used</span><b class="num" id="td-home">–</b></div></div>
-      <div class="fact"><svg class="ic" style="color:var(--grid)"><use href="#i-plug"/></svg><div><span class="label">From grid</span><b class="num" id="td-grid">–</b></div></div>
-    </div>
-    <div class="fc-wrap"><div class="fc hr" id="hr" role="img"></div></div>
-    <p class="caption"><span class="key" style="--c:var(--solar)"></span>Solar <span class="key" style="--c:var(--home)"></span>Home <span class="key" style="--c:var(--grid)"></span>From grid · kWh per hour, from the readings taken every minute</p>
+    <div class="hrblock" style="--c:var(--solar)"><div class="hrhead"><svg class="ic"><use href="#i-sun"/></svg>Solar generated <b class="num" id="td-solar">–</b></div>
+      <div class="fc-wrap"><div class="fc hr" id="hr0" role="img"></div></div></div>
+    <div class="hrblock" style="--c:var(--home)"><div class="hrhead"><svg class="ic"><use href="#i-home"/></svg>Home used <b class="num" id="td-home">–</b></div>
+      <div class="fc-wrap"><div class="fc hr" id="hr1" role="img"></div></div></div>
+    <div class="hrblock" style="--c:var(--grid)"><div class="hrhead"><svg class="ic"><use href="#i-plug"/></svg>From grid <b class="num" id="td-grid">–</b></div>
+      <div class="fc-wrap"><div class="fc hr" id="hr2" role="img"></div></div></div>
+    <p class="caption">kWh per hour today, from the readings taken every minute. Each chart has its own scale.</p>
   </section>
 
   <section class="card"><h2><svg class="ic sm"><use href="#i-list"/></svg>Circuits</h2><div class="table"><table id="circuits"></table></div></section>
@@ -437,11 +438,13 @@ async function refresh() {
 
   const hrs = sv?.hourlyToday || [], kwh = v => `${v.toFixed(1)} kWh`, tot = i => hrs.reduce((a, h) => a + h[i], 0);
   ['td-solar', 'td-home', 'td-grid'].forEach((id, i) => setText(id, hrs.length ? kwh(tot(i)) : '–'));
-  const hmax = Math.max(0.01, ...hrs.flat()), names = ['Solar', 'Home', 'From grid'], cols = ['--solar', '--home', '--grid'];
-  $('hr').innerHTML = hrs.length ? hrs.map((h, k) => `<div class="col" title="${t12(k + ':00')}: ${h.map((v, i) => `${names[i]} ${v.toFixed(2)} kWh`).join(', ')}">
-      <div class="trio">${h.map((v, i) => `<i style="--c:var(${cols[i]});height:${Math.round(v / hmax * 96)}px"></i>`).join('')}</div>
-      <span>${t12(k + ':00')}</span></div>`).join('') : '<span class="mute">No readings yet today.</span>';
-  $('hr').setAttribute('aria-label', 'kWh per hour today: ' + hrs.map((h, k) => `${t12(k + ':00')} solar ${h[0].toFixed(2)}, home ${h[1].toFixed(2)}, grid ${h[2].toFixed(2)}`).join('; '));
+  ['Solar', 'Home used', 'From grid'].forEach((name, i) => {
+    const max = Math.max(0.01, ...hrs.map(h => h[i]));
+    $('hr' + i).innerHTML = hrs.length ? hrs.map((h, k) => `<div class="col" title="${t12(k + ':00')}: ${h[i].toFixed(2)} kWh">
+        <span class="kw">${h[i] ? h[i].toFixed(2) : ''}</span><i style="height:${Math.round(h[i] / max * 72)}px"></i>
+        <span>${t12(k + ':00')}</span></div>`).join('') : '<span class="mute">No readings yet today.</span>';
+    $('hr' + i).setAttribute('aria-label', `${name} kWh per hour today: ` + hrs.map((h, k) => `${t12(k + ':00')} ${h[i].toFixed(2)}`).join('; '));
+  });
 
   if (d) {
     const e = d.effective, cls = { 'peak':'bad', 'part-peak':'warn', 'off-peak':'ok' }[d.period];
