@@ -136,6 +136,8 @@
           <label><input type="radio" name="mode" value="dry-run"><span>Dry-run</span></label>
           <label><input type="radio" name="mode" value="auto"><span>Auto</span></label>
         </div>
+        <span class="chip" id="ctl"></span>
+        <button class="ghost" type="button" id="take" onclick="takeControl()" hidden>Take control</button>
       </div>
       <div class="row">
         <div class="row" id="force-btns">
@@ -253,6 +255,13 @@ async function refresh() {
   $('raw').textContent = JSON.stringify(st.raw, null, 2);
 
   for (const r of document.querySelectorAll('#mode input')) r.checked = r.value === st.config.mode;
+  const c = st.control;
+  if (c) {
+    $('ctl').innerHTML = c.leader ? `<span class="dot ok"></span>In control · ${esc(c.instance)}`
+      : `<span class="dot warn"></span><span class="warn">Standby · ${esc(c.holder || 'referee unreachable')} in control</span>`;
+    $('ctl').title = c.error || `Control referee: ${c.referee}`;
+    $('take').hidden = c.leader;
+  }
   if (!cfgLoaded) { for (const el of $('cfg').elements) if (el.name) el.value = st.config[el.name]; cfgLoaded = true; }
 }
 
@@ -280,6 +289,7 @@ function askForce(v) {
   $('force-btns').hidden = true; $('force-confirm').hidden = false; $('fc-yes').focus();
 }
 function toggleSettings() { const open = $('cfg').hidden; $('cfg').hidden = !open; $('cfg-btn').setAttribute('aria-expanded', open); $('cfg-btn').textContent = open ? 'Hide settings' : 'Settings'; }
+async function takeControl() { const r = await post('/api/take-control', {}); if (r.error) { $('err').hidden = false; $('err').textContent = r.error; } }
 function cancelForce() { $('force-confirm').hidden = true; $('force-btns').hidden = false; }
 
 const tick = () => refresh().catch(() => { $('err').hidden = false; $('err').textContent = 'Dashboard server unreachable. Is server.py running?'; });
