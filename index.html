@@ -411,7 +411,7 @@
         <label class="field">Battery capacity Wh<small>0 = read from panel</small><input name="capacity_wh" type="number" min="0"></label>
         <label class="field">Charge power W<small>0 = panel's AC charge setting</small><input name="charge_w" type="number" min="0"></label>
         <label class="field">Safety margin, minutes<input name="margin_min" type="number" min="0"></label>
-        <div class="form-foot"><button type="submit">Save settings</button><span id="cfg-msg" role="status"></span></div>
+        <div class="form-foot"><button type="submit">Save settings</button><button class="ghost" type="button" onclick="toggleSettings(false)">Close</button><span id="cfg-msg" role="status"></span></div>
       </form>
   </section>
 
@@ -682,7 +682,11 @@ function askForce(v) {
   $('fc-yes').onclick = async () => { cancelForce(); const r = await post('/api/force', { on: v }); if (r.error) showError(r.error); };
   $('force-btns').hidden = true; $('force-confirm').hidden = false; $('fc-yes').focus();
 }
-function toggleSettings() { const open = $('cfg').hidden; $('cfg').hidden = !open; $('cfg-btn').setAttribute('aria-expanded', open); $('cfg-t').textContent = open ? 'Hide settings' : 'Settings'; }
+function toggleSettings(open = $('cfg').hidden) {
+  $('cfg').hidden = !open; $('cfg-btn').setAttribute('aria-expanded', open); $('cfg-t').textContent = open ? 'Hide settings' : 'Settings';
+  if (!open) $('cfg-btn').focus();  // back to where it opened, so the page doesn't jump
+}
+addEventListener('keydown', e => { if (e.key === 'Escape' && !$('cfg').hidden) toggleSettings(false); });
 async function takeControl() { const r = await post('/api/take-control', {}); if (r.error) showError(r.error); }
 function cancelForce() { $('force-confirm').hidden = true; $('force-btns').hidden = false; }
 
