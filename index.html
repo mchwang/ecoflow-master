@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Home Power</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap">
+<style>
+  /* dark by default (regardless of system setting); light only when chosen with the header toggle */
+  :root {
+    --bg:#0f172a; --card:#1b2336; --fg:#f8fafc; --mute:#94a3b8; --line:#2b3549; --input:#475569;
+    --ok:#22c55e; --warn:#f59e0b; --bad:#f87171; --solar:#fbbf24; --track:#272f42;
+    --btn:#22c55e; --on-btn:#0f172a; --ring:#ffffff; color-scheme:dark;
+  }
+  :root[data-theme="light"] {
+    --bg:#f8fafc; --card:#ffffff; --fg:#0f172a; --mute:#475569; --line:#e2e8f0; --input:#cbd5e1;
+    --ok:#15803d; --warn:#b45309; --bad:#b91c1c; --solar:#d97706; --track:#e2e8f0;
+    --btn:#1e293b; --on-btn:#ffffff; --ring:#2563eb; color-scheme:light;
+  }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  main > *, .two > *, .kpis > *, .facts > * { min-width:0; }  /* let wide tables scroll inside cards instead of widening the page */
+  body { margin:0; padding:24px 16px 48px; background:var(--bg); color:var(--fg);
+         font:15px/1.5 "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width:1120px; margin:0 auto; display:grid; gap:16px; }
+  h1 { font-size:22px; margin:0; font-weight:700; letter-spacing:-.01em; }
+  h2 { font-size:13px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); margin:0 0 12px; }
+  .num { font-variant-numeric:tabular-nums; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); } .mute { color:var(--mute); }
+
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; }
+  .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 12px; border-radius:999px; border:1px solid var(--line); background:var(--card); font-size:13px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:currentColor; flex:none; }
+
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; }
+  .kpis { display:grid; gap:12px; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); }
+  .kpi .label { color:var(--mute); font-size:13px; }
+  .kpi .value { display:block; font-size:30px; font-weight:700; line-height:1.2; margin-top:2px; }
+  .kpi .sub { color:var(--mute); font-size:13px; }
+  .bar { height:8px; background:var(--track); border-radius:4px; overflow:hidden; margin-top:8px; }
+  .bar i { display:block; height:100%; background:var(--ok); border-radius:4px; transition:width .3s ease-out; }
+
+  .status { display:flex; gap:10px; align-items:flex-start; font-size:17px; margin-bottom:12px; }
+  .status .dot { width:12px; height:12px; margin-top:7px; }
+  .facts { display:grid; gap:12px; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); margin-bottom:16px; }
+  .fact { border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .fact .label { color:var(--mute); font-size:12px; } .fact b { display:block; font-size:18px; }
+
+  .fc-wrap { overflow-x:auto; margin-bottom:6px; }
+  .fc { display:flex; gap:6px; align-items:flex-end; min-height:120px; padding-top:4px; }
+  .fc .col { display:grid; justify-items:center; gap:2px; min-width:44px; font-size:12px; color:var(--mute); }
+  .fc .kw { color:var(--fg); font-weight:600; }
+  .fc i { display:block; width:24px; background:var(--solar); border-radius:4px 4px 0 0; min-height:2px; }
+  .fc .after { opacity:.4; }
+  .caption { color:var(--mute); font-size:12px; margin:0 0 12px; }
+
+  .controls { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; border-top:1px solid var(--line); padding-top:14px; }
+  .seg { display:inline-flex; border:1px solid var(--input); border-radius:10px; overflow:hidden; }
+  .seg label { position:relative; }
+  .seg input { position:absolute; opacity:0; inset:0; margin:0; cursor:pointer; }
+  .seg span { display:flex; align-items:center; min-height:44px; padding:0 16px; cursor:pointer; transition:background .15s, color .15s; }
+  .seg label + label span { border-left:1px solid var(--input); }
+  .seg input:checked + span { background:var(--btn); color:var(--on-btn); font-weight:600; }
+  .seg input:focus-visible + span { outline:2px solid var(--ring); outline-offset:-4px; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+
+  button { font:inherit; min-height:44px; padding:0 16px; border-radius:10px; cursor:pointer; border:1px solid transparent;
+           background:var(--btn); color:var(--on-btn); font-weight:600; transition:filter .15s, background .15s; }
+  button:hover { filter:brightness(1.08); }
+  button.ghost { background:transparent; color:var(--fg); border-color:var(--input); font-weight:500; }
+  button.ghost:hover { background:var(--track); filter:none; }
+  :focus-visible { outline:2px solid var(--ring); outline-offset:2px; }
+  .confirm { border:1px solid var(--warn); border-radius:10px; padding:10px 12px; }
+
+  details > summary { cursor:pointer; min-height:44px; display:flex; align-items:center; font-weight:600; }
+  form { display:grid; gap:14px; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); align-items:start; margin-top:16px; }
+  label.field { display:grid; gap:4px; font-size:13px; font-weight:500; }
+  label.field small { color:var(--mute); font-weight:400; font-size:12px; }
+  input:not([type=radio]), select { font:inherit; min-height:44px; padding:8px 10px; border:1px solid var(--input); border-radius:10px; background:var(--bg); color:var(--fg); width:100%; }
+  .form-foot { grid-column:1 / -1; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+
+  .two { display:grid; gap:16px; grid-template-columns:repeat(auto-fit, minmax(min(320px, 100%), 1fr)); }
+  .table { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; }
+  td, th { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  th { color:var(--mute); font-weight:500; font-size:13px; }
+  td.r, th.r { text-align:right; }
+  ul.log { margin:0; padding-left:18px; color:var(--mute); font-size:13px; }
+  pre { overflow-x:auto; font-size:12px; max-height:420px; margin:12px 0 0; }
+  #err { border-color:var(--bad); color:var(--bad); }
+  @media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Home Power <span id="demo" class="chip warn" hidden>Demo data</span></h1>
+    <div class="chips">
+      <span id="grid" class="chip"></span>
+      <span id="tou" class="chip"></span>
+      <span id="upd" class="chip"></span>
+      <button class="ghost" type="button" id="theme" onclick="toggleTheme()"></button>
+    </div>
+  </header>
+  <div id="err" class="card" role="alert" hidden></div>
+
+  <section class="kpis" aria-label="Live readings">
+    <div class="card kpi"><span class="label">Battery</span><b class="value num" id="soc">–</b><span class="sub num" id="socwh"></span><div class="bar" aria-hidden="true"><i id="socbar"></i></div></div>
+    <div class="card kpi"><span class="label">Solar now</span><b class="value num" id="solar">–</b></div>
+    <div class="card kpi"><span class="label">Home load</span><b class="value num" id="load">–</b></div>
+    <div class="card kpi"><span class="label">From grid</span><b class="value num" id="gridw">–</b></div>
+    <div class="card kpi"><span class="label">Backup time left</span><b class="value num" id="left">–</b><span class="sub">at current load</span></div>
+  </section>
+
+  <section class="card" aria-labelledby="sc-h">
+    <h2 id="sc-h">Smart charge · PG&amp;E EV2-A</h2>
+    <div class="status" aria-live="polite"><span class="dot" id="sdot"></span><div><b id="stitle">–</b> <span id="sreason" class="mute"></span></div></div>
+
+    <div class="facts">
+      <div class="fact"><span class="label" id="proj-l">Expected by deadline (no grid)</span><b class="num" id="proj">–</b></div>
+      <div class="fact"><span class="label">Solar before deadline</span><b class="num" id="pvkwh">–</b></div>
+      <div class="fact"><span class="label">Solar array</span><b class="num" id="array">–</b><span class="mute" style="font-size:12px" id="arraysrc"></span></div>
+      <div class="fact"><span class="label">Daylight</span><b class="num" id="sun">–</b></div>
+    </div>
+
+    <div class="fc-wrap"><div class="fc" id="fc" role="img"></div></div>
+    <p class="caption" id="fc-cap"></p>
+
+    <div class="controls">
+      <div class="row">
+        <span class="mute" id="mode-l">Mode</span>
+        <div class="seg" id="mode" role="radiogroup" aria-labelledby="mode-l">
+          <label><input type="radio" name="mode" value="off"><span>Off</span></label>
+          <label><input type="radio" name="mode" value="dry-run"><span>Dry-run</span></label>
+          <label><input type="radio" name="mode" value="auto"><span>Auto</span></label>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row" id="force-btns">
+          <button class="ghost" type="button" onclick="askForce(true)">Force charge on</button>
+          <button class="ghost" type="button" onclick="askForce(false)">Force charge off</button>
+        </div>
+        <div class="confirm row" id="force-confirm" role="alertdialog" aria-labelledby="fc-q" hidden>
+          <span id="fc-q"></span>
+          <button type="button" id="fc-yes">Yes</button>
+          <button class="ghost" type="button" onclick="cancelForce()">Cancel</button>
+        </div>
+        <button class="ghost" type="button" id="cfg-btn" aria-expanded="false" aria-controls="cfg" onclick="toggleSettings()">Settings</button>
+      </div>
+    </div>
+
+      <form id="cfg" onsubmit="saveCfg(event)" novalidate hidden>
+        <label class="field">Cheap window starts<input name="offpeak_start" type="time"></label>
+        <label class="field">Deadline (price rises)<input name="offpeak_end" type="time"></label>
+        <label class="field">Minimum % by deadline<input name="min_soc" type="number" min="10" max="100"></label>
+        <label class="field">Latitude<input name="lat" type="number" step="0.0001"></label>
+        <label class="field">Longitude<input name="lon" type="number" step="0.0001"></label>
+        <label class="field">Solar kW until learned<small>0 = ignore solar until history is learned</small><input name="pv_kw" type="number" step="0.1" min="0"></label>
+        <label class="field">Solar ratio until learned<small>Losses, tilt and shade (0.8 typical)</small><input name="pv_pr" type="number" step="0.05" min="0" max="1.5"></label>
+        <label class="field">Battery capacity Wh<small>0 = read from panel</small><input name="capacity_wh" type="number" min="0"></label>
+        <label class="field">Charge power W<small>0 = panel's AC charge setting</small><input name="charge_w" type="number" min="0"></label>
+        <label class="field">Safety margin, minutes<input name="margin_min" type="number" min="0"></label>
+        <div class="form-foot"><button type="submit">Save settings</button><span id="cfg-msg" role="status"></span></div>
+      </form>
+  </section>
+
+  <section class="two">
+    <div class="card"><h2>Batteries</h2><div class="table"><table id="bats"></table></div></div>
+    <div class="card"><h2>Panel settings</h2><div class="table"><table id="settings"></table></div></div>
+  </section>
+
+  <section class="card"><h2>Circuits</h2><div class="table"><table id="circuits"></table></div></section>
+  <section class="card"><h2>Activity</h2><ul class="log" id="log"></ul></section>
+  <details class="card"><summary>All raw panel data</summary><pre id="raw"></pre></details>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const store = { get: k => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  $('theme').textContent = t === 'light' ? 'Dark mode' : 'Light mode';
+  $('theme').setAttribute('aria-label', `Switch to ${t === 'light' ? 'dark' : 'light'} mode`);
+}
+function toggleTheme() { const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'; store.set('theme', t); applyTheme(t); }
+applyTheme(store.get('theme') || 'dark');
+const esc = s => String(s ?? '–').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const w = v => v == null ? '–' : Math.abs(v) >= 1000 ? (v/1000).toFixed(2)+' kW' : Math.round(v)+' W';
+const on = v => v === true || v === 1 || /_ON$/.test(v ?? '');
+const STALE_MS = 3 * 60 * 1000;  // server polls the panel every 60 s
+let cfgLoaded = false, last = null;
+
+async function refresh() {
+  const st = await fetch('/api/state').then(r => r.json());
+  last = st;
+  $('demo').hidden = !st.demo;
+  $('err').hidden = !st.error; $('err').textContent = st.error || '';
+  const s = st.status, d = st.decision;
+  if (!s) return;
+
+  $('grid').innerHTML = s.gridOnline ? `<span class="dot ok"></span>Grid online · ${esc(s.gridVolt)} V` : '<span class="dot bad"></span><b class="bad">Grid down</b>';
+  const age = st.updated ? Date.now() - new Date(st.updated).getTime() : Infinity;
+  $('upd').innerHTML = age > STALE_MS
+    ? `<span class="dot warn"></span><span class="warn">Stale · last update ${esc((st.updated || '').slice(11, 16) || 'never')}</span>`
+    : `Updated ${esc(st.updated.slice(11, 16))}`;
+
+  $('soc').textContent = s.soc + '%'; $('socbar').style.width = s.soc + '%';
+  $('socwh').textContent = s.fullCapWh ? `${((s.remainWh ?? s.soc/100*s.fullCapWh)/1000).toFixed(1)} of ${(s.fullCapWh/1000).toFixed(1)} kWh` : '';
+  $('solar').textContent = w(s.solarWatt); $('load').textContent = w(s.loadWatt); $('gridw').textContent = w(s.gridWatt);
+  // panel reports 0 while on grid; then estimate from stored energy at the current load
+  const mins = s.dischargeMin || (s.remainWh && s.loadWatt ? Math.round(s.remainWh / s.loadWatt * 60) : null);
+  $('left').textContent = mins == null ? '–' : `${Math.floor(mins/60)}h ${mins%60}m`;
+
+  if (d) {
+    const e = d.effective, cls = { 'peak':'bad', 'part-peak':'warn', 'off-peak':'ok' }[d.period];
+    $('tou').innerHTML = `<span class="dot ${cls}"></span>${d.period} · $${d.price.toFixed(3)}/kWh · ${d.season}`;
+    $('sdot').className = 'dot ' + (d.charge || d.startAt ? 'warn' : 'ok');
+    $('stitle').textContent = d.charge ? 'Grid charging' : d.startAt ? `Grid charge planned ${d.startAt}` : 'Not charging';
+    $('stitle').className = d.charge ? 'warn' : '';
+    $('sreason').textContent = '— ' + d.reason + ` (mode: ${st.config.mode})`;
+    $('proj-l').textContent = `Expected by ${e.offpeak_end} (no grid)`;
+    $('proj').innerHTML = `${d.projectedSoc}% <span class="mute" style="font-size:13px;font-weight:400">min ${e.min_soc}%</span>`;
+    $('proj').className = 'num ' + (d.projectedSoc >= e.min_soc ? 'ok' : 'warn');
+    $('pvkwh').textContent = `${d.solarKwh} kWh`;
+    $('array').textContent = e.pv_kw ? `${e.pv_kw} kW` : 'Not set';
+    $('arraysrc').textContent = e.pv_source || '';
+    $('sun').textContent = d.sunrise ? `${d.sunrise} – ${d.sunset}` : (e.lat || e.lon ? 'No forecast' : 'Set location');
+
+    // no array size yet -> chart sunlight (W/m2) so cloudy vs sunny is still visible
+    const useKw = e.pv_kw > 0, val = f => useKw ? f.kw : f.ghi, fmt = f => useKw ? f.kw.toFixed(1) : f.ghi;
+    const max = Math.max(0.01, ...d.forecast.map(val)), dl = e.offpeak_end.slice(0, 2);
+    $('fc-cap').textContent = (useKw ? 'Forecast solar output per hour (kW).' : 'Forecast sunlight per hour (W/m²); switches to kW once the array size is known.')
+      + " Faded hours are after the deadline and don't count.";
+    $('fc').innerHTML = d.forecast.length ? d.forecast.map(f => `<div class="col${f.hour >= dl ? ' after' : ''}">
+        <span class="kw">${fmt(f)}</span><i style="height:${Math.round(val(f)/max*64)}px"></i>
+        <span>${+f.hour % 12 || 12}${+f.hour < 12 ? 'a' : 'p'}</span><span>${f.cloud}% cloud</span></div>`).join('')
+      : '<span class="mute">No forecast yet. Set your location in Charge settings.</span>';
+    $('fc').setAttribute('aria-label', d.forecast.length
+      ? `Forecast ${useKw ? 'solar kW' : 'sunlight W/m²'} by hour: ` + d.forecast.map(f => `${+f.hour}:00 ${fmt(f)}, ${f.cloud}% cloud`).join('; ')
+      : 'No forecast');
+  }
+
+  $('bats').innerHTML = '<tr><th>Battery</th><th class="r">Level</th><th class="r">Size</th><th class="r">Power</th><th class="r">Temp</th><th>Force charge</th></tr>' +
+    s.batteries.map(b => `<tr><td>DPU ${b.n}</td><td class="r">${b.soc}%</td><td class="r">${b.fullCapWh ? (b.fullCapWh/1000).toFixed(1) + ' kWh' : '–'}</td>
+      <td class="r">${w(b.watt)}</td><td class="r">${b.temp ?? '–'}°C</td><td>${b.enabled === 0 ? '<span class="mute">Disabled</span>' : on(b.forceCharge) ? '<b class="warn">On</b>' : 'Off'}</td></tr>`).join('');
+  const rows = [['Backup reserve', s.backupReserveSoc + '%'], ['AC charge power', w(s.chargeWattPower)], ['Max charge level', s.maxChargeSoc + '%'],
+    ['EPS mode', on(s.epsMode) ? 'On' : 'Off'], ['Storm Guard', on(s.stormGuard) ? 'On' : 'Off'], ['Storm active', on(s.inStorm) ? 'Yes' : 'No'], ['Smart backup mode', s.smartBackupMode]];
+  $('settings').innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td class="r">${esc(v)}</td></tr>`).join('');
+  $('circuits').innerHTML = '<tr><th>#</th><th>Circuit</th><th class="r">Power</th><th>State</th></tr>' +
+    s.circuits.map(c => `<tr><td>${c.ch}</td><td>${esc(c.name)}</td><td class="r">${w(c.watt)}</td><td>${c.on == null ? '–' : on(c.on) ? 'On' : '<span class="mute">Off</span>'}</td></tr>`).join('');
+  $('log').innerHTML = st.log.map(l => `<li>${esc(l)}</li>`).join('') || '<li>No actions yet</li>';
+  $('raw').textContent = JSON.stringify(st.raw, null, 2);
+
+  for (const r of document.querySelectorAll('#mode input')) r.checked = r.value === st.config.mode;
+  if (!cfgLoaded) { for (const el of $('cfg').elements) if (el.name) el.value = st.config[el.name]; cfgLoaded = true; }
+}
+
+async function post(path, body) {
+  const r = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) }).then(r => r.json());
+  await refresh();
+  return r;
+}
+
+async function saveCfg(e) {
+  e.preventDefault();
+  const r = await post('/api/config', Object.fromEntries(new FormData(e.target)));
+  $('cfg-msg').className = r.error ? 'bad' : 'ok';
+  $('cfg-msg').textContent = r.error ? `Not saved: ${r.error}` : 'Saved';
+}
+
+for (const r of document.querySelectorAll('#mode input'))
+  r.addEventListener('change', () => post('/api/config', { mode: r.value }));
+
+function askForce(v) {
+  const n = last?.status?.batteries?.filter(b => b.enabled !== 0).length ?? 0;
+  $('fc-q').textContent = `Turn grid force charge ${v ? 'on' : 'off'} for ${n} batter${n === 1 ? 'y' : 'ies'}?`;
+  $('fc-yes').textContent = v ? 'Yes, turn on' : 'Yes, turn off';
+  $('fc-yes').onclick = async () => { cancelForce(); const r = await post('/api/force', { on: v }); if (r.error) { $('err').hidden = false; $('err').textContent = r.error; } };
+  $('force-btns').hidden = true; $('force-confirm').hidden = false; $('fc-yes').focus();
+}
+function toggleSettings() { const open = $('cfg').hidden; $('cfg').hidden = !open; $('cfg-btn').setAttribute('aria-expanded', open); $('cfg-btn').textContent = open ? 'Hide settings' : 'Settings'; }
+function cancelForce() { $('force-confirm').hidden = true; $('force-btns').hidden = false; }
+
+const tick = () => refresh().catch(() => { $('err').hidden = false; $('err').textContent = 'Dashboard server unreachable. Is server.py running?'; });
+tick(); setInterval(tick, 10000);
+</script>
+</body>
+</html>
