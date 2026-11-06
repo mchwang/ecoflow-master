@@ -40,6 +40,9 @@ class Lease(unittest.TestCase):
         self.assertEqual(d.claim_lease("laptop", 200, 300), "laptop")            # renew
         self.assertEqual(d.claim_lease("vps", 400, 300), "laptop")               # renewed at 200: still fresh
         self.assertEqual(d.claim_lease("vps", 501, 300), "vps")                  # laptop silent >300 s: failover
+        self.assertEqual(d.peek_lease(502, 300), "vps")                          # peek sees the holder...
+        self.assertEqual(d.claim_lease("laptop", 503, 300), "vps")               # ...and peeking changed nothing
+        self.assertIsNone(d.peek_lease(900, 300))                                # nobody renewed: no holder
 
 
 def basic(user, pw):

@@ -463,10 +463,12 @@ async function refresh() {
   for (const r of document.querySelectorAll('#mode input')) r.checked = r.value === st.config.mode;
   const c = st.control;
   if (c) {
+    const auto = st.config.mode === 'auto';
     $('ctl').innerHTML = c.leader ? `<span class="dot ok live"></span>${icon('shield')}In control · ${esc(c.instance)}`
+      : !auto ? `<span class="dot"></span><span class="mute">Not in Auto · ${c.error ? 'referee unreachable' : esc(c.holder || 'no copy') + ' in control'}</span>`
       : `<span class="dot warn"></span><span class="warn">Standby · ${esc(c.holder || 'referee unreachable')} in control</span>`;
-    $('ctl').title = c.error || `Control referee: ${c.referee}`;
-    $('take').hidden = c.leader;
+    $('ctl').title = c.error || `This copy: ${c.instance} · control referee: ${c.referee}`;
+    $('take').hidden = c.leader || !auto;
   }
   if (!cfgLoaded) { for (const el of $('cfg').elements) if (el.name) el.value = st.config[el.name]; cfgLoaded = true; }
 }
