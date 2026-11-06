@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE TABLE IF NOT EXISTS daily_savings (   -- grid cost avoided per local day (see planner.savings)
     day TEXT PRIMARY KEY,        -- YYYY-MM-DD, Pacific time
     saved REAL NOT NULL,         -- dollars
-    kwh REAL NOT NULL,           -- energy the system delivered to the house
+    kwh REAL NOT NULL,           -- energy the house used that day
     updated INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS weather_hourly (   -- Open-Meteo, one row per hour; past hours hold the after-the-fact estimate
@@ -48,7 +48,7 @@ class DB:
             self.conn.executescript(SCHEMA)
             # Columns added after the first release: add them to existing databases (old rows keep NULL).
             for table, cols in {"readings": ["solar1_w REAL", "solar2_w REAL", "soc1 REAL", "soc2 REAL"],
-                                "daily_savings": ["solar1_kwh REAL", "solar2_kwh REAL"]}.items():
+                                "daily_savings": ["solar1_kwh REAL", "solar2_kwh REAL", "cost_without REAL", "grid_cost REAL"]}.items():
                 have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
                 for col in cols:
                     if col.split()[0] not in have:
@@ -118,22 +118,27 @@ class DB:
             row = self.conn.execute("SELECT holder, renewed FROM lease WHERE id = 1").fetchone()
         return row[0] if row and row[1] >= now - ttl else None
 
-    def readings_since(self, since_ts):
-        """[(ts, soc, load_w, grid_w, solar_w, solar1_w, solar2_w)] oldest first."""
+    def readings_since(self, since_ts, until_ts=2**62):
+        """[(ts, soc, load_w, grid_w, solar_w, solar1_w, solar2_w)] in [since, until), oldest first."""
         with self.lock:
             return self.conn.execute("SELECT ts, soc, load_w, grid_w, solar_w, solar1_w, solar2_w FROM readings"
-                                     " WHERE ts >= ? ORDER BY ts", (int(since_ts),)).fetchall()
+                                     " WHERE ts >= ? AND ts < ? ORDER BY ts", (int(since_ts), int(until_ts))).fetchall()
+
+    def first_reading_ts(self):
+        with self.lock:
+            return self.conn.execute("SELECT MIN(ts) FROM readings").fetchone()[0]
 
     def save_daily_savings(self, by_day, now):
-        """by_day: {day: [saved, kwh, solar1_kwh, solar2_kwh]} (solar values optional)."""
+        """by_day: {day: [saved, home_kwh, solar1_kwh, solar2_kwh, cost_without, grid_cost]} (later values optional)."""
         with self.lock, self.conn:
             self.conn.executemany(
-                "INSERT OR REPLACE INTO daily_savings (day, saved, kwh, updated, solar1_kwh, solar2_kwh) VALUES (?,?,?,?,?,?)",
-                [(d, round(v[0], 4), round(v[1], 4), int(now), *(round(x, 4) for x in (list(v[2:4]) + [0, 0])[:2]))
+                "INSERT OR REPLACE INTO daily_savings (day, saved, kwh, updated, solar1_kwh, solar2_kwh, cost_without, grid_cost)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                [(d, round(v[0], 4), round(v[1], 4), int(now), *(round(x, 4) for x in (list(v[2:6]) + [0] * 4)[:4]))
                  for d, v in by_day.items()])
 
     def daily_savings(self, since_day="0000-00-00"):
-        """[(day, saved, kwh, solar1_kwh, solar2_kwh)] oldest first."""
+        """[(day, saved, home_kwh, solar1_kwh, solar2_kwh, cost_without, grid_cost)] oldest first."""
         with self.lock:
-            return self.conn.execute("SELECT day, saved, kwh, solar1_kwh, solar2_kwh FROM daily_savings"
+            return self.conn.execute("SELECT day, saved, kwh, solar1_kwh, solar2_kwh, cost_without, grid_cost FROM daily_savings"
                                      " WHERE day >= ? ORDER BY day", (since_day,)).fetchall()
