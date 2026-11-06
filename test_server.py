@@ -34,7 +34,7 @@ class Base(unittest.TestCase):
         server.CONFIG_FILE, server.db, server.demo = tmp / "config.json", DB(tmp / "t.db"), None
         self.addCleanup(server.db.conn.close)
         server.cfg.clear()
-        server.cfg.update(server.DEFAULTS, mode="auto", margin_min=900)  # big margin: charge window open all morning
+        server.cfg.update(server.DEFAULTS, mode="auto", hold_mode="auto", margin_min=900)  # big margin: charge window open all morning
         for k in ("leader", "holder", "lastWould", "lastBal", "onBattery", "lastHold"):
             server.state.pop(k, None)
         server.state["status"] = None
@@ -138,6 +138,13 @@ class Commands(Base):
             server.tick(at(8))
         self.assertEqual(self.reserves(), [])                   # never held
         self.assertIn("solar", server.state["decision"]["battery"]["why"])
+
+    def test_hold_mode_dry_run_logs_but_still_grid_charges(self):
+        server.cfg["hold_mode"] = "dry-run"                     # the default until holding is safe on the panel
+        server.tick(at(6))
+        self.assertEqual(self.reserves(), [])
+        self.assertEqual(self.sent(), [True])                   # grid charging stays automatic
+        self.assertTrue(any("would hold the battery" in l for l in server.state["log"]))
 
     def test_dry_run_never_holds(self):
         server.cfg["mode"] = "dry-run"
