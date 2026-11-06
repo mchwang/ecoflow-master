@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from ecoflow_api import sign
-from planner import ROUND_TRIP, decide, fit_array_kw, hm12, savings, solar_wh, tou_period
+from planner import ROUND_TRIP, afternoon_sun, decide, target_soc, fit_array_kw, hm12, savings, solar_wh, tou_period
 
 TZ = ZoneInfo("America/Los_Angeles")
 CFG = {"capacity_wh": 30720, "charge_w": 4000, "min_soc": 60, "max_soc": 95,
@@ -48,6 +48,22 @@ class Learn(unittest.TestCase):
 
     def test_no_data(self):
         self.assertEqual(fit_array_kw([], 95), (0.0, 0))
+
+
+class AfternoonSun(unittest.TestCase):
+    C = {**CFG, "min_soc": 60, "min_soc_cloudy": 80, "sunny_after_wh": 300, "max_soc": 95}
+
+    def test_counts_only_sun_after_deadline(self):
+        hourly = [(at(15), 900), (at(16), 380), (at(17), 207), (at(18), 0)]  # 2-3 PM excluded; 3-5 PM counted
+        self.assertAlmostEqual(afternoon_sun(at(8), self.C, hourly), 587)
+        self.assertIsNone(afternoon_sun(at(8), self.C, []))
+
+    def test_target_by_afternoon_sun(self):
+        self.assertEqual(target_soc(self.C, 587)[0], 60)     # sunny afternoon
+        self.assertEqual(target_soc(self.C, 120)[0], 80)     # overcast / early sunset
+        self.assertEqual(target_soc(self.C, None)[0], 80)    # no forecast: assume no sun
+        self.assertEqual(target_soc({**self.C, "max_soc": 75}, 0)[0], 75)  # never above the panel's max charge level
+        self.assertIn("little sun after 3 PM", target_soc(self.C, 120)[1])
 
 
 class Savings(unittest.TestCase):
