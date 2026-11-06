@@ -6,20 +6,20 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Home Power">
-<meta name="theme-color" content="#0f172a">
+<meta name="theme-color" content="#050a14">
 <title>Home Power</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;500;600;700&family=Orbitron:wght@500;600;700&display=swap">
 <style>
   /* dark by default (regardless of system setting); light only when chosen with the header toggle */
   :root {
-    --bg:#0f172a; --card:#1b2336; --card2:#222b40; --fg:#f8fafc; --mute:#94a3b8; --line:#2b3549; --input:#475569;
-    --ok:#22c55e; --warn:#f59e0b; --bad:#f87171; --track:#272f42;
-    --solar:#fbbf24; --grid:#60a5fa; --home:#a78bfa; --batt:#22c55e; --low:#ef4444;
-    --btn:#22c55e; --on-btn:#0f172a; --ring:#ffffff; color-scheme:dark;
+    --bg:#050a14; --card:rgba(12,24,44,.72); --card2:rgba(18,34,60,.6); --fg:#eaf6ff; --mute:#8fa8c4; --line:rgba(56,189,248,.16); --input:rgba(56,189,248,.32);
+    --ok:#34d399; --warn:#fbbf24; --bad:#fb7185; --track:rgba(56,189,248,.1);
+    --solar:#fcd34d; --grid:#38bdf8; --home:#c084fc; --batt:#34d399; --low:#f43f5e;
+    --btn:#34d399; --on-btn:#04120c; --ring:#67e8f9; --accent:#22d3ee; --glow:1; color-scheme:dark;
   }
   :root[data-theme="light"] {
-    --bg:#f8fafc; --card:#ffffff; --card2:#f1f5f9; --fg:#0f172a; --mute:#475569; --line:#e2e8f0; --input:#cbd5e1;
+    --bg:#eef4fb; --card:rgba(255,255,255,.85); --card2:#f1f6fc; --fg:#0b1526; --mute:#475569; --line:#d4e2f1; --input:#b6c9de; --accent:#0891b2; --glow:0;
     --ok:#15803d; --warn:#b45309; --bad:#b91c1c; --track:#e2e8f0;
     --solar:#d97706; --grid:#2563eb; --home:#7c3aed; --batt:#15803d; --low:#dc2626;
     --btn:#1e293b; --on-btn:#ffffff; --ring:#2563eb; color-scheme:light;
@@ -28,7 +28,7 @@
   [hidden] { display:none !important; }
   main > *, .two > *, .kpis > *, .facts > * { min-width:0; }  /* let wide tables scroll inside cards instead of widening the page */
   body { margin:0; padding:calc(24px + env(safe-area-inset-top, 0px)) 16px calc(48px + env(safe-area-inset-bottom, 0px)); background:var(--bg); color:var(--fg);
-         font:16px/1.5 "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", sans-serif; }
+         font:16px/1.5 "Exo 2", system-ui, -apple-system, "Segoe UI", sans-serif; }
   main { max-width:1120px; margin:0 auto; display:grid; gap:16px; }
   h1 { font-size:22px; margin:0; font-weight:700; letter-spacing:-.01em; display:flex; align-items:center; gap:10px; }
   h2 { font-size:14px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); margin:0 0 12px; display:flex; align-items:center; gap:8px; }
@@ -70,7 +70,7 @@
   /* energy flow diagram */
   .flowcard { display:grid; gap:4px; }
   .flow { width:100%; max-height:300px; display:block; margin:auto 0; }
-  .flow text { fill:var(--fg); font:600 16px "Plus Jakarta Sans", system-ui, sans-serif; }
+  .flow text { fill:var(--fg); font:600 16px "Exo 2", system-ui, sans-serif; }
   .flow text.sub { fill:var(--mute); font-weight:500; font-size:15px; }
   .flow .base { stroke:var(--line); stroke-width:4; fill:none; stroke-linecap:round; }
   .flow .stream { fill:none; stroke-width:4; stroke-linecap:round; stroke-dasharray:2 12; opacity:0; transition:opacity .4s;
@@ -141,7 +141,7 @@
   .daynav input { width:auto; }
   .subh { font-size:14px; color:var(--mute); text-transform:uppercase; letter-spacing:.06em; margin:18px 0 8px; font-weight:600; }
   .sankey { display:block; width:100%; min-width:620px; height:280px; }
-  .sankey text { fill:var(--fg); font:600 13px "Plus Jakarta Sans", system-ui, sans-serif; }
+  .sankey text { fill:var(--fg); font:600 13px "Exo 2", system-ui, sans-serif; }
   .sankey text.s { fill:var(--mute); font-weight:500; font-size:12px; }
   .sankey path { opacity:.38; transition:opacity .2s; } .sankey path:hover { opacity:.7; }
   .hrgrid { display:grid; gap:12px 24px; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); margin-bottom:10px; }
@@ -204,6 +204,53 @@
   pre { overflow-x:auto; font-size:13px; max-height:420px; margin:12px 0 0; }
   #err { border-color:var(--bad); color:var(--bad); display:flex; gap:10px; align-items:flex-start; }
 
+  /* ---- Futuristic HUD layer: deep-space backdrop, glass panels with corner brackets, neon glow ---- */
+  body { background:
+      radial-gradient(1200px 700px at 10% -10%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 60%),
+      radial-gradient(900px 600px at 100% 110%, color-mix(in srgb, var(--home) 12%, transparent), transparent 60%),
+      linear-gradient(color-mix(in srgb, var(--accent) 6%, transparent) 1px, transparent 1px) 0 0 / 44px 44px,
+      linear-gradient(90deg, color-mix(in srgb, var(--accent) 6%, transparent) 1px, transparent 1px) 0 0 / 44px 44px,
+      var(--bg);
+    background-attachment:fixed; }
+  h1, h2, .subh, details > summary, .goal .label { font-family:"Orbitron", "Exo 2", sans-serif; }
+  h1 { font-size:20px; letter-spacing:.08em; text-transform:uppercase;
+       text-shadow:0 0 calc(var(--glow) * 18px) color-mix(in srgb, var(--accent) 55%, transparent); }
+  h2, .subh { font-size:12px; letter-spacing:.18em; color:color-mix(in srgb, var(--accent) 70%, var(--fg)); font-weight:600; }
+  h2::after { content:""; flex:1; height:1px; margin-left:6px;
+              background:linear-gradient(90deg, color-mix(in srgb, var(--accent) 45%, transparent), transparent); }
+  .card { position:relative; border-radius:14px; backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+          box-shadow:inset 0 1px 0 color-mix(in srgb, var(--accent) 12%, transparent), 0 10px 40px rgb(0 0 0 / calc(var(--glow) * .35)); }
+  .card::before, .card::after { content:""; position:absolute; width:16px; height:16px; pointer-events:none;
+          border:2px solid color-mix(in srgb, var(--accent) 75%, transparent); opacity:.8; }
+  .card::before { top:-1px; left:-1px; border-right:0; border-bottom:0; border-top-left-radius:14px; }
+  .card::after { bottom:-1px; right:-1px; border-left:0; border-top:0; border-bottom-right-radius:14px; }
+  .kpi .value, .goal b, .batt .pct { font-weight:700; letter-spacing:.01em;
+          text-shadow:0 0 calc(var(--glow) * 16px) color-mix(in srgb, var(--c, var(--accent)) 55%, transparent); }
+  .kpi .badge, .badge { border:1px solid color-mix(in srgb, var(--c) 35%, transparent);
+          box-shadow:0 0 calc(var(--glow) * 14px) color-mix(in srgb, var(--c) 30%, transparent); }
+  .bar { border-radius:2px; } .bar i { border-radius:2px; box-shadow:0 0 calc(var(--glow) * 10px) var(--lvl); }
+  .fc i, .hr i { box-shadow:0 0 calc(var(--glow) * 10px) color-mix(in srgb, var(--c, var(--solar)) 55%, transparent); }
+  .fc i { border-radius:3px 3px 1px 1px; }
+  .chip { background:color-mix(in srgb, var(--card) 80%, transparent); border-color:var(--line); backdrop-filter:blur(8px); }
+  .fact, .goal, .bfacts div { border-radius:10px; border-color:var(--line);
+          background:linear-gradient(160deg, color-mix(in srgb, var(--accent) 6%, var(--card2)), var(--card2)); }
+  button { border-radius:8px; letter-spacing:.02em; transition:box-shadow .2s, border-color .2s, background .2s, transform .1s; }
+  button:not(.ghost) { box-shadow:0 0 calc(var(--glow) * 16px) color-mix(in srgb, var(--btn) 45%, transparent); }
+  button.ghost { border-color:var(--input); }
+  button.ghost:hover { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 10%, transparent);
+          box-shadow:0 0 calc(var(--glow) * 14px) color-mix(in srgb, var(--accent) 35%, transparent); }
+  .seg { border-color:var(--input); border-radius:8px; }
+  .seg input:checked + span { box-shadow:0 0 calc(var(--glow) * 18px) color-mix(in srgb, var(--btn) 55%, transparent); }
+  input:not([type=radio]), select { background:color-mix(in srgb, var(--bg) 70%, transparent); border-radius:8px; }
+  .flow .node { fill:color-mix(in srgb, var(--bg) 60%, var(--card2)); stroke:color-mix(in srgb, var(--accent) 35%, transparent); }
+  .flow .stream.on { filter:drop-shadow(0 0 calc(var(--glow) * 4px) currentColor); }
+  .tip { background:color-mix(in srgb, var(--bg) 88%, var(--accent)); border-color:color-mix(in srgb, var(--accent) 40%, transparent); backdrop-filter:blur(10px); }
+  /* one slow scan line across the energy-flow panel */
+  .flowcard > .scan { position:absolute; inset:0; border-radius:14px; pointer-events:none; opacity:calc(var(--glow) * .5);
+          background:linear-gradient(180deg, transparent, color-mix(in srgb, var(--accent) 12%, transparent) 50%, transparent) no-repeat;
+          background-size:100% 30%; animation:scan 6s linear infinite; }
+  @keyframes scan { from { background-position:0 -40%; } to { background-position:0 140%; } }
+
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation:none !important; transition:none !important; }
     .flow .stream.on { stroke-dasharray:none; opacity:.8; }  /* still show which way power flows, without motion */
@@ -265,7 +312,7 @@
   </section>
 
   <section class="two">
-    <div class="card flowcard">
+    <div class="card flowcard"><span class="scan" aria-hidden="true"></span>
       <h2><svg class="ic sm"><use href="#i-activity"/></svg>Energy flow</h2>
       <svg class="flow" viewBox="0 0 360 260" role="img" aria-labelledby="flow-desc">
         <desc id="flow-desc">Power flow between solar, grid, battery and home</desc>
