@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 
 from db import DB
 from ecoflow_api import SSL_CTX, EcoFlow
-from planner import deadline_of, decide, fit_array_kw, solar_wh, tou_period
+from planner import deadline_of, decide, hm12, fit_array_kw, solar_wh, tou_period
 
 HERE = Path(__file__).parent
 TZ = ZoneInfo("America/Los_Angeles")
@@ -42,6 +42,11 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE = DATA_DIR / "config.json"
 db = DB(DATA_DIR / "homepower.db")
 HOST = os.environ.get("HOST", "127.0.0.1")
+
+
+def stamp(dt):
+    return f"{dt:%b} {dt.day}, {hm12(dt)}"  # "Nov 6, 4:20 AM"
+
 USER = os.environ.get("DASHBOARD_USER", "admin")
 PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
 # Control lease: only the copy holding it sends automatic commands. The referee copy (no LEADER_URL,
@@ -72,7 +77,7 @@ _saved = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
 cfg = {k: _saved.get(k, v) for k, v in DEFAULTS.items()}  # drops settings from older versions
 lock = threading.Lock()
 state = {"status": None, "decision": None, "error": None, "updated": None,
-         "log": deque((f"{datetime.fromtimestamp(t, TZ):%m-%d %H:%M} {m}" for t, m in db.recent_events()), maxlen=50)}
+         "log": deque((f"{stamp(datetime.fromtimestamp(t, TZ))} {m}" for t, m in db.recent_events()), maxlen=50)}
 weather = {"at": 0, "key": None, "data": None, "error": None}
 
 
@@ -140,7 +145,7 @@ def save_cfg():
 def log(msg):
     now = datetime.now(TZ)
     db.add_event(now.timestamp(), msg)
-    state["log"].appendleft(f"{now:%m-%d %H:%M} {msg}")
+    state["log"].appendleft(f"{stamp(now)} {msg}")
 
 
 def q(data, key, default=None):
