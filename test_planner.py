@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from ecoflow_api import sign
-from planner import ROUND_TRIP, afternoon_sun, decide, target_soc, fit_array_kw, hm12, savings, solar_wh, tou_period
+from planner import ROUND_TRIP, afternoon_sun, balance, decide, target_soc, fit_array_kw, hm12, savings, solar_wh, tou_period
 
 TZ = ZoneInfo("America/Los_Angeles")
 CFG = {"capacity_wh": 30720, "charge_w": 4000, "min_soc": 60, "max_soc": 95,
@@ -64,6 +64,25 @@ class AfternoonSun(unittest.TestCase):
         self.assertEqual(target_soc(self.C, None)[0], 80)    # no forecast: assume no sun
         self.assertEqual(target_soc({**self.C, "max_soc": 75}, 0)[0], 75)  # never above the panel's max charge level
         self.assertIn("little sun after 3 PM", target_soc(self.C, 120)[1])
+
+
+class Balance(unittest.TestCase):
+    C = {"bal_full_soc": 90, "bal_release_soc": 75, "bal_sun_left_wh": 100}
+
+    def b(self, d1, held=False, grid=True, charging=False, sun=1000):
+        return balance(d1, 50, grid, charging, sun, held, self.C)[0]
+
+    def test_pause_when_dpu1_nearly_full_and_hold_until_release(self):
+        self.assertFalse(self.b(85))
+        self.assertTrue(self.b(90))
+        self.assertTrue(self.b(80, held=True))    # hysteresis: stays paused between 75 and 90
+        self.assertFalse(self.b(75, held=True))   # DPU 1 drained enough: resume DPU 2
+
+    def test_safety_releases(self):
+        self.assertFalse(self.b(95, held=True, grid=False))       # outage: need both
+        self.assertFalse(self.b(95, held=True, charging=True))    # grid charging both
+        self.assertFalse(self.b(95, held=True, sun=40))           # no sun left to make room for
+        self.assertTrue(self.b(95, sun=None))                     # no forecast: rule still works on levels
 
 
 class Savings(unittest.TestCase):
