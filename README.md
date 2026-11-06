@@ -4,6 +4,9 @@ A local dashboard for an EcoFlow Smart Home Panel 2 with Delta Pro Ultra batteri
 
 The automation works like this: it reads the hourly sunlight forecast from [Open-Meteo](https://open-meteo.com), which is free and needs no key. The forecast already reflects cloud cover and drops to zero after sunset. From it, the planner estimates how much solar will reach the batteries before 3 pm, when part-peak starts. If the predicted level at 3 pm is below the minimum (**60%**, or **80%** when the forecast shows little sun after 3 pm, under 300 Wh/m²; both adjustable), it turns on SHP2 **force charge** (`chNForceCharge`) just long enough to cover the shortfall. It never grid-charges during part-peak or peak. Set your latitude/longitude and array size on the dashboard; until then solar counts as 0.
 
+
+**DPU balancing.** While DPU 1 (the larger battery, which gets the afternoon sun) is nearly full (90%), the app pauses DPU 2 with the panel's battery enable switch (`ch2EnableSet`). The house then drains DPU 1 first, making room for its afternoon solar. DPU 2 resumes when DPU 1 drops to 75%, the grid goes down, grid charging starts, or little sunlight is left today. The app only resumes a battery it paused itself. Balancing has its own Off / Dry-run / Auto setting and starts in Dry-run. It only matters while the batteries are running the house.
+
 ```bash
 cp .env.example .env      # add access key + secret key (panel SN is auto-detected)
 python3 server.py         # http://127.0.0.1:8787  (demo data if .env is empty)

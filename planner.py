@@ -151,3 +151,26 @@ def savings(rows, day_start, initial_kwh=0.0, initial_cost_per_kwh=None, max_gap
         if t >= day_start:
             out["today"] += saved; out["today_kwh"] += delivered
     return out
+
+
+def balance(dpu1_soc, dpu2_soc, grid_online, grid_charging, sun_left_wh, held, cfg):
+    """Should DPU 2 be paused so the house drains DPU 1 first?
+
+    DPU 1 (bigger, sunnier in the afternoon) nearly full -> pause DPU 2 so DPU 1 makes room for its
+    afternoon solar instead of wasting it. Safety releases win over everything: grid down (need full
+    backup), our grid charge running (charge both), DPU 1 drained to the release level, or no
+    meaningful sun left today. Returns (hold, reason).
+    """
+    if not grid_online:
+        return False, "grid is down: both batteries available for backup"
+    if grid_charging:
+        return False, "grid charging: both batteries charge"
+    if sun_left_wh is not None and sun_left_wh < cfg["bal_sun_left_wh"]:
+        return False, "little sun left today: nothing to make room for"
+    if held:
+        if dpu1_soc <= cfg["bal_release_soc"]:
+            return False, f"DPU 1 down to {dpu1_soc:.0f}%: room for its solar again"
+        return True, f"DPU 1 at {dpu1_soc:.0f}%: house runs on DPU 1 until it reaches {cfg['bal_release_soc']:.0f}%"
+    if dpu1_soc >= cfg["bal_full_soc"]:
+        return True, f"DPU 1 nearly full ({dpu1_soc:.0f}%): pausing DPU 2 so DPU 1 makes room for afternoon sun"
+    return False, f"DPU 1 at {dpu1_soc:.0f}%: pauses DPU 2 at {cfg['bal_full_soc']:.0f}%"

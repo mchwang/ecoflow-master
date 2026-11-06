@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 
 from db import DB
 from ecoflow_api import SSL_CTX, EcoFlow
-from planner import ROUND_TRIP, afternoon_sun, deadline_of, decide, target_soc, hm12, price_at, savings, fit_array_kw, solar_wh, tou_period
+from planner import ROUND_TRIP, afternoon_sun, balance, deadline_of, decide, target_soc, hm12, price_at, savings, fit_array_kw, solar_wh, tou_period
 
 HERE = Path(__file__).parent
 TZ = ZoneInfo("America/Los_Angeles")
@@ -72,8 +72,14 @@ DEFAULTS = {
     "charge_w": 0,               # 0 = use the panel's chargeWattPower setting
     "margin_min": 30,
     "charging_by_us": False,     # persisted so a restart can still turn off what we turned on
+    # DPU balancing: pause DPU 2 while DPU 1 is nearly full, so DPU 1 drains and makes room for its afternoon sun.
+    "bal_mode": "dry-run",       # off | dry-run | auto, separate from the charging mode until verified on the panel
+    "bal_full_soc": 90,          # pause DPU 2 when DPU 1 reaches this %
+    "bal_release_soc": 75,       # resume DPU 2 when DPU 1 drops to this %
+    "bal_sun_left_wh": 100,      # resume when less forecast sunlight than this (Wh/m2) is left today
+    "bal_held": False,           # we paused DPU 2 (persisted, so we only ever resume what we paused)
 }
-NUMERIC = {"min_soc", "min_soc_cloudy", "sunny_after_wh", "lat", "lon", "pv_kw", "pv_pr", "capacity_wh", "charge_w", "margin_min"}
+NUMERIC = {"bal_full_soc", "bal_release_soc", "bal_sun_left_wh", "min_soc", "min_soc_cloudy", "sunny_after_wh", "lat", "lon", "pv_kw", "pv_pr", "capacity_wh", "charge_w", "margin_min"}
 
 _saved = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
 cfg = {k: _saved.get(k, v) for k, v in DEFAULTS.items()}  # drops settings from older versions
@@ -225,13 +231,50 @@ def effective(s):
 
 
 def set_force_charge(s, on):
-    params = {f"ch{b['n']}ForceCharge": "FORCE_CHARGE_ON" if on else "FORCE_CHARGE_OFF" for b in s["batteries"] if b["enabled"] != 0}
+    params = {f"ch{b['n']}ForceCharge": "FORCE_CHARGE_ON" if on else "FORCE_CHARGE_OFF" for b in s["batteries"]
+              if b["enabled"] != 0 or (b["n"] == 2 and cfg["bal_held"])}  # include DPU 2 if only we paused it
     if DEMO:
         for b in demo["batteries"]:
             b["forceCharge"] = params[f"ch{b['n']}ForceCharge"]
     else:
         api.set_shp2(SN, params)
     log(f"Sent force charge {'ON' if on else 'OFF'}: {params}")
+
+
+def set_dpu2(enabled):
+    params = {"ch2EnableSet": 1 if enabled else 0}
+    if DEMO:
+        for b in demo["batteries"]:
+            if b["n"] == 2:
+                b["enabled"] = params["ch2EnableSet"]
+    else:
+        api.set_shp2(SN, params)
+    log(f"Sent DPU 2 {'resume' if enabled else 'pause'}: {params}")
+
+
+def run_balance(s, c, now, hourly, leader):
+    bats = {b["n"]: b for b in s["batteries"]}
+    if 1 not in bats or 2 not in bats:
+        return None
+    if not cfg["bal_held"] and bats[2]["enabled"] == 0:
+        return {"hold": False, "held": False, "mode": cfg["bal_mode"], "why": "DPU 2 is disabled in the EcoFlow app; leaving it alone"}
+    sun_left = solar_wh(now, now.replace(hour=23, minute=59), hourly, 1, 1) if hourly else None
+    grid_charging = cfg["charging_by_us"] or any(b["forceCharge"] == "FORCE_CHARGE_ON" for b in bats.values())
+    hold, why = balance(bats[1]["soc"], bats[2]["soc"], bool(s["gridOnline"]), grid_charging, sun_left, cfg["bal_held"], c)
+    if hold != cfg["bal_held"] and cfg["bal_mode"] != "off":
+        if cfg["bal_mode"] == "auto" and leader:
+            set_dpu2(not hold)
+            cfg["bal_held"] = hold
+            save_cfg()
+            log(why)
+        else:
+            msg = f"[{'standby' if cfg['bal_mode'] == 'auto' else 'dry-run'}] would {'pause' if hold else 'resume'} DPU 2"
+            if state.get("lastBal") != msg:
+                log(f"{msg}: {why}")
+            state["lastBal"] = msg
+    else:
+        state["lastBal"] = None
+    return {"hold": hold, "held": cfg["bal_held"], "mode": cfg["bal_mode"], "why": why}
 
 
 demo = None
@@ -307,6 +350,7 @@ def tick():
                 state["lastWould"] = msg
         else:
             state["lastWould"] = None
+        bal = run_balance(s, c, now, hourly, leader)
         period, season, price = tou_period(now)
         saved = month_savings(now, c["capacity_wh"])
         # Open-Meteo values are the mean of the hour ending at t, so label each bar with the hour it covers.
@@ -317,7 +361,7 @@ def tick():
             "projectedSoc": d["projected_soc"], "solarKwh": round(pv_wh / 1000, 1),
             "sunrise": w and w["sunrise"], "sunset": w and w["sunset"], "forecast": forecast,
             "period": period, "season": season, "price": price, "effective": c,
-        }, savings=saved, control={"instance": INSTANCE, "holder": state.get("holder"), "leader": leader,
+        }, savings=saved, balance=bal, control={"instance": INSTANCE, "holder": state.get("holder"), "leader": leader,
                     "referee": LEADER_URL or "this copy", "error": state.get("leaseError")})
 
 
@@ -388,17 +432,19 @@ class Handler(BaseHTTPRequestHandler):
                 with lock:
                     to_auto = body.get("mode") == "auto" and cfg["mode"] != "auto"
                     for k, v in body.items():
-                        if k == "mode" and v in ("off", "dry-run", "auto"):
+                        if k in ("mode", "bal_mode") and v in ("off", "dry-run", "auto"):
                             cfg[k] = v
                         elif k in ("offpeak_start", "offpeak_end"):
                             cfg[k] = datetime.strptime(v, "%H:%M").strftime("%H:%M")  # "8:00" -> "08:00"
                         elif k in NUMERIC:
                             v = float(v)
-                            if (v < 0 and k not in ("lat", "lon")) or (k in ("min_soc", "min_soc_cloudy") and v > 100):
+                            if (v < 0 and k not in ("lat", "lon")) or (k in ("min_soc", "min_soc_cloudy", "bal_full_soc", "bal_release_soc") and v > 100):
                                 raise ValueError(f"{k} out of range")
                             cfg[k] = v
                         else:
                             raise ValueError(f"unknown or invalid setting {k}")
+                    if cfg["bal_release_soc"] >= cfg["bal_full_soc"]:
+                        raise ValueError("DPU 2 resume level must be below its pause level")
                     save_cfg()
                     log(f"Settings changed: {body}")
                     if to_auto and state["status"]:  # switching to Auto takes control (latest wins)
