@@ -137,13 +137,17 @@ def _rounded(x):
 def day_data(day, now, cap_wh):
     """One local day: energy flow and money (planner.day_report), kWh per hour, solar per DPU."""
     start = datetime.combine(day, datetime.min.time(), TZ)
-    rows = [(datetime.fromtimestamp(ts, TZ), *rest)
-            for ts, *rest in db.readings_since(start.timestamp(), (start + timedelta(days=1)).timestamp())]
+    span = (start.timestamp(), (start + timedelta(days=1)).timestamp())
+    rows = [(datetime.fromtimestamp(ts, TZ), *rest) for ts, *rest in db.readings_since(*span)]
+    wh = db.stored_wh(*span)  # precise battery energy at the first and last reading, when recorded
+    # use it only if it spans the same readings as the energy flows (not, say, from mid-morning after an upgrade)
+    precise = wh and rows and wh[0][0] - rows[0][0].timestamp() <= 600 and rows[-1][0].timestamp() - wh[1][0] <= 600
     hours = hourly_kwh([(t, solar, load, grid) for t, _, load, grid, solar, *_ in rows])
     solar = daily_solar_kwh([(t, s1, s2) for t, *_, s1, s2 in rows]).get(day.isoformat(), [0.0, 0.0])
     upto = now.hour + 1 if day == now.date() else 24
     return {"date": day.isoformat(), "readings": len(rows), "hourly": [[round(x, 3) for x in h] for h in hours[:upto]],
-            "solarDpu": [round(x, 2) for x in solar], "report": _rounded(day_report([r[:5] for r in rows], cap_wh))}
+            "solarDpu": [round(x, 2) for x in solar], "report": _rounded(day_report([r[:5] for r in rows], cap_wh,
+                                                     stored_delta_kwh=(wh[1][1] - wh[0][1]) / 1000 if precise else None))}
 
 
 def refresh_savings(now, cap_wh):
@@ -404,7 +408,8 @@ def tick(now=None):
         ghi_now = next((g for t, g in hourly if t - timedelta(hours=1) <= now < t), 0)
         b = {x["n"]: x for x in s["batteries"]}
         db.add_reading(now.timestamp(), s["soc"], s["solarWatt"], s["loadWatt"], s["gridWatt"], ghi_now, cfg["charging_by_us"],
-                       *(b.get(n, {}).get("solarWatt") for n in (1, 2)), *(b.get(n, {}).get("soc") for n in (1, 2)))
+                       *(b.get(n, {}).get("solarWatt") for n in (1, 2)), *(b.get(n, {}).get("soc") for n in (1, 2)),
+                       s.get("remainWh"))
         fit_kw, fit_n = learned_kw(now, c["max_soc"])
         if fit_n >= MIN_SAMPLES:
             c["pv_kw"], c["pv_pr"], c["pv_source"] = round(fit_kw, 2), 1.0, f"learned from {fit_n} readings"

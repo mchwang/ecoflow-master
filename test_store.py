@@ -56,6 +56,15 @@ class PerDpuAndWeather(unittest.TestCase):
         d.conn.close()
         self.assertEqual(DB(path).readings_since(0)[-1], (200, 51, 700, 200, 500, 120, 380))
 
+    def test_stored_energy_first_and_last_in_range(self):
+        d = DB(Path(TMP) / "t6.db")
+        d.add_reading(100, 12, 0, 0, 0, 0, 0)                          # older reading without the Wh value
+        d.add_reading(200, 12, 0, 0, 0, 0, 0, remain_wh=3700.5)
+        d.add_reading(300, 13, 0, 0, 0, 0, 0, remain_wh=3900.25)
+        d.add_reading(400, 14, 0, 0, 0, 0, 0, remain_wh=4200.0)        # outside the range asked for
+        self.assertEqual(d.stored_wh(0, 400), ((200, 3700.5), (300, 3900.25)))
+        self.assertIsNone(d.stored_wh(0, 250))                          # only one reading has it
+
     def test_learning_uses_stored_weather_then_forecast(self):
         d = DB(Path(TMP) / "t5.db")
         d.add_reading(3600 * 10 + 60, 50, 500, 0, 0, 400, 0, 200, 300, 50, 50)    # hour ending 11*3600

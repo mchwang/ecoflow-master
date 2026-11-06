@@ -200,7 +200,7 @@ def price_at(dt):
     return tou_period(dt)[2]
 
 
-def day_report(rows, cap_wh, max_gap_s=300):
+def day_report(rows, cap_wh, max_gap_s=300, stored_delta_kwh=None):
     """One day's energy and money from the minute readings.
 
     rows: [(datetime, soc %, load_w, grid_w, solar_w)] in time order; each reading holds until the next,
@@ -208,6 +208,9 @@ def day_report(rows, cap_wh, max_gap_s=300):
     battery; whatever solar and grid is left over goes into the battery. Grid kWh and $ are split by PG&E
     period. Saved = what the house would have cost all from the grid minus what the grid actually cost
     (solar, battery and its charging losses all land in that difference).
+    stored_delta_kwh: the change in battery energy from the panel's Wh reading; without it the whole-% level is
+    used, which moves in ~1% steps. Energy balance: energy in (grid + solar + drawn from earlier charge) =
+    home + stored + losses; balance_kwh is the raw losses figure (negative = the meters disagree a little).
     """
     periods = ("off-peak", "part-peak", "peak")
     grid_home, grid_batt, grid_usd = (dict.fromkeys(periods, 0.0) for _ in range(3))
@@ -224,14 +227,18 @@ def day_report(rows, cap_wh, max_gap_s=300):
         grid_home[period] += gh * k; grid_batt[period] += (imp - gh) * k; grid_usd[period] += imp * k * price
         batt_home += (load - sh - gh) * k; home += load * k; without += load * k * price
     socs = [r[1] for r in rows if r[1] is not None]
-    delta = (socs[-1] - socs[0]) / 100 * cap_wh / 1000 if socs else 0.0
+    delta = stored_delta_kwh if stored_delta_kwh is not None else (socs[-1] - socs[0]) / 100 * cap_wh / 1000 if socs else 0.0
     into = solar_batt + sum(grid_batt.values())
     grid_cost = sum(grid_usd.values())
+    energy_in = solar_home + solar_batt + sum(grid_home.values()) + sum(grid_batt.values()) + max(0.0, -delta)
+    balance = into + max(0.0, -delta) - batt_home - max(0.0, delta)  # = energy_in - home - stored
     return {"grid_home": grid_home, "grid_batt": grid_batt, "grid_usd": grid_usd,
             "grid_kwh": {p: grid_home[p] + grid_batt[p] for p in periods},
             "solar_home": solar_home, "solar_batt": solar_batt, "solar_kwh": solar_home + solar_batt,
             "batt_home": batt_home, "home_kwh": home, "drawn_kwh": max(0.0, -delta), "stored_kwh": max(0.0, delta),
-            "losses_kwh": max(0.0, into + max(0.0, -delta) - batt_home - max(0.0, delta)),  # noise can't go below 0
+            "losses_kwh": max(0.0, balance), "balance_kwh": balance,  # the flow diagram can't draw a negative
+            "energy_in": energy_in, "loss_pct": max(0.0, balance) / energy_in * 100 if energy_in else 0.0,
+            "batt_eff": min(100.0, (1 - balance / into) * 100) if into > 0.05 and balance >= -0.05 else None,  # unknown if meters disagree
             "cost_without": without, "grid_cost": grid_cost, "saved": without - grid_cost}
 
 

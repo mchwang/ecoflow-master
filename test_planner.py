@@ -139,6 +139,20 @@ class DayReport(unittest.TestCase):
         self.assertAlmostEqual(r["solar_home"], 1.0); self.assertAlmostEqual(r["saved"], 1.0 * self.OFF)
         self.assertAlmostEqual(r["home_kwh"], 1.0 + 0.7 / 60)
 
+    def test_precise_stored_energy_gives_losses_and_efficiency(self):
+        rows = [(at(2), 50, 0, 1000, 0), (at(3), 50, 0, 0, 0)]       # 1 kWh into the battery; whole-% level didn't move
+        r = day_report(rows, self.CAP, max_gap_s=3600, stored_delta_kwh=0.9)  # panel's Wh reading: +0.9 kWh stored
+        self.assertAlmostEqual(r["stored_kwh"], 0.9); self.assertAlmostEqual(r["losses_kwh"], 0.1)
+        self.assertAlmostEqual(r["energy_in"], 1.0); self.assertAlmostEqual(r["loss_pct"], 10)
+        self.assertAlmostEqual(r["batt_eff"], 90)                     # 0.9 of the 1.0 kWh charged is still there
+
+    def test_meter_gap_is_reported_not_hidden(self):
+        rows = [(at(2), 50, 0, 1000, 0), (at(3), 50, 0, 0, 0)]
+        r = day_report(rows, self.CAP, max_gap_s=3600, stored_delta_kwh=1.1)  # meters say more stored than went in
+        self.assertAlmostEqual(r["losses_kwh"], 0)                    # the flow diagram can't draw a negative
+        self.assertAlmostEqual(r["balance_kwh"], -0.1)                # but the balance shows the gap
+        self.assertIsNone(r["batt_eff"])                              # and efficiency isn't guessed
+
     def test_sources_balance_sinks(self):
         rows = [(at(9), 20, 800, 300, 900), (at(10), 25, 1200, 0, 400), (at(11), 22, 600, 3500, 100), (at(12), 40, 0, 0, 0)]
         r = day_report(rows, self.CAP, max_gap_s=3600)
