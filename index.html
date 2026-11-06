@@ -485,7 +485,7 @@ async function refresh() {
   if (d) {
     const e = d.effective, cls = { 'peak':'bad', 'part-peak':'warn', 'off-peak':'ok' }[d.period];
     $('tou').innerHTML = `<span class="dot ${cls}"></span>${icon('dollar')}${d.period} · $${d.price.toFixed(3)}/kWh · ${d.season}`;
-    $('sbadge').style.setProperty('--c', d.charge || d.startAt ? 'var(--warn)' : 'var(--ok)');
+    $('sbadge').style.setProperty('--c', d.kind === 'outage' ? 'var(--low)' : d.charge || d.startAt ? 'var(--warn)' : 'var(--ok)');
     $('sbadge').classList.toggle('glow', !!d.charge);
     $('sicon').setAttribute('href', d.charge ? '#i-bolt-batt' : d.startAt ? '#i-clock' : '#i-shield');
     const known = e.pv_kw > 0 || (e.profile_hours || []).some(n => n);
@@ -495,6 +495,7 @@ async function refresh() {
       outside: ['No grid charging now', `Power costs more until ${t12(e.offpeak_start)}. It only grid-charges from ${t12(e.offpeak_start)} to ${end}.`],
       ok: ['On track, no grid charge needed', `${sol}, so the battery should reach ${d.projectedSoc}% by ${end}. Target is ${e.min_soc}% (${e.target_why}).`],
       planned: [`Grid charge at ${d.startAt ? t12(d.startAt) : '–'}`, `${sol}, so the battery would only reach ${d.projectedSoc}% by ${end}. It needs ${e.min_soc}% (${e.target_why}).`],
+      outage: ['Grid outage: on battery', `The panel switched the house to the battery. Backup time is shown at the top; no grid charging until the grid returns.`],
       manual: ['Grid charging off (by you)', `You turned grid charging off by hand, so it stays off for the rest of today's cheap window. Use Force charge on to resume.`],
       charging: ['Grid charging now', `Charging so the battery reaches ${e.min_soc}% by ${end} (${e.target_why}). Without the grid it would reach ${d.projectedSoc}%.`],
     }[d.kind] || [d.charge ? 'Grid charging' : 'Not charging', d.reason];

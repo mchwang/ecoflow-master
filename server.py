@@ -408,7 +408,10 @@ def tick(now=None):
         sim = simulate(now, deadline, s["soc"], *model)
         c["load_hours"] = len(loads)
         d = decide(now, s["soc"], c, pv_wh, cfg["charging_by_us"], projected=round(sim["soc"], 1))
-        if now.timestamp() < cfg["manual_off_until"] and d["kind"] in ("planned", "charging"):
+        if s["gridOnline"] == 0:  # outage: the panel runs the house from the battery; there's nothing to charge from
+            d = {**d, "kind": "outage", "charge": False, "start_at": None,
+                 "reason": "Grid is down: the battery is powering the house; no grid charging until it returns"}
+        elif now.timestamp() < cfg["manual_off_until"] and d["kind"] in ("planned", "charging"):
             d = {**d, "kind": "manual", "charge": False, "reason": "You turned grid charging off by hand; it stays off for today"}
         charge, reason, start_at = d["charge"], d["reason"], d["start_at"]
         mode = cfg["mode"]
