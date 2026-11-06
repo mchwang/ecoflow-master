@@ -136,9 +136,11 @@
   [data-tip] { cursor:default; } .hr [data-tip]:hover i, .fc [data-tip]:hover i { filter:brightness(1.25); }
   .dayhead { display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:space-between; margin-bottom:10px; }
   .dayhead h2 { margin:0; }
-  .daynav { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .daynav { display:flex; gap:6px; align-items:center; margin-left:auto; min-width:0; }
   .daynav button { flex:none; min-width:44px; padding:0 12px; white-space:nowrap; }  /* never squeeze 'Today' */
-  .daynav input { width:auto; }
+  .daynav input[type=date] { width:auto; flex:0 1 170px; min-width:0; }  /* beats the global input width:100% */
+  @media (max-width:440px) { .daynav { margin-left:0; width:100%; } .daynav button { min-width:40px; padding:0 10px; }
+    .daynav input[type=date] { flex:1 1 auto; padding:8px 6px; } }
   .subh { font-size:14px; color:var(--mute); text-transform:uppercase; letter-spacing:.06em; margin:18px 0 8px; font-weight:600; }
   .sankey { display:block; width:100%; min-width:620px; height:280px; }
   .sankey text { fill:var(--fg); font:600 13px "Exo 2", system-ui, sans-serif; }
@@ -412,9 +414,9 @@
 
   <section class="card" aria-labelledby="td-h">
     <div class="dayhead"><h2 id="td-h"><svg class="ic sm"><use href="#i-activity"/></svg><span id="td-title">Today</span></h2>
-      <div class="daynav"><button id="day-prev" aria-label="Previous day" onclick="stepDay(-1)">‹</button>
+      <div class="daynav"><button class="ghost" id="day-prev" aria-label="Previous day" onclick="stepDay(-1)">‹</button>
         <input type="date" id="day-pick" aria-label="Day to show" onchange="pickDay(this.value)">
-        <button id="day-next" aria-label="Next day" onclick="stepDay(1)">›</button><button id="day-today" onclick="pickDay(null)">Today</button></div></div>
+        <button class="ghost" id="day-next" aria-label="Next day" onclick="stepDay(1)">›</button><button id="day-today" onclick="pickDay(null)">Today</button></div></div>
     <div class="hrgrid">
       <div class="hrblock" style="--c:var(--solar)"><div class="hrhead"><svg class="ic"><use href="#i-sun"/></svg>Solar generated <b class="num" id="td-solar">–</b></div><div class="hr" id="hr0" role="img"></div></div>
       <div class="hrblock" style="--c:var(--home)"><div class="hrhead"><svg class="ic"><use href="#i-home"/></svg>Home used <b class="num" id="td-home">–</b></div><div class="hr" id="hr1" role="img"></div></div>
