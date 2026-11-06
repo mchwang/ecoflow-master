@@ -207,8 +207,11 @@
       <b class="value num" id="load">–</b></div>
     <div class="card kpi" style="--c:var(--grid)"><div class="top"><span class="label">From grid</span><span class="badge" style="--c:var(--grid)"><svg class="ic"><use href="#i-plug"/></svg></span></div>
       <b class="value num" id="gridw">–</b></div>
-    <div class="card kpi"><div class="top"><span class="label">Backup time left</span><span class="badge"><svg class="ic"><use href="#i-clock"/></svg></span></div>
+    <div class="card kpi"><div class="top"><span class="label">Backup time</span><span class="badge"><svg class="ic"><use href="#i-clock"/></svg></span></div>
       <b class="value num" id="left">–</b><span class="sub">at current load</span></div>
+    <div class="card kpi" style="--c:var(--ok)" title="Grid cost avoided by running the house from solar and battery. Grid-charged energy is charged at its PG&amp;E price with 20% round-trip loss; solar is free.">
+      <div class="top"><span class="label">Saved today</span><span class="badge" style="--c:var(--ok)"><svg class="ic"><use href="#i-dollar"/></svg></span></div>
+      <b class="value num" id="saved">–</b><span class="sub num" id="saved-sub"></span></div>
   </section>
 
   <section class="two">
@@ -390,6 +393,9 @@ async function refresh() {
   const mins = s.dischargeMin || (s.remainWh && s.loadWatt ? Math.round(s.remainWh / s.loadWatt * 60) : null);
   setText('left', mins == null ? '–' : `${Math.floor(mins/60)}h ${mins%60}m`);
   drawFlow(s, d);
+  const sv = st.savings, money = v => (v < 0 ? '−$' : '$') + Math.abs(v).toFixed(2);
+  setText('saved', sv ? money(sv.today) : '–');
+  $('saved-sub').textContent = sv ? `${money(sv.total)} this month · ${money(sv.allTime)} all time` : 'No history yet';
 
   if (d) {
     const e = d.effective, cls = { 'peak':'bad', 'part-peak':'warn', 'off-peak':'ok' }[d.period];

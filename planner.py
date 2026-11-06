@@ -84,3 +84,51 @@ def fit_array_kw(samples, max_soc, min_ghi=50):
     used = [(w, g) for w, g, soc in samples if g >= min_ghi and soc < max_soc - 1]
     total_ghi = sum(g for _, g in used)
     return (sum(w for w, _ in used) / total_ghi if total_ghi else 0.0), len(used)
+
+
+ROUND_TRIP = 0.8  # battery charge + discharge efficiency: 1 kWh in -> 0.8 kWh back out
+
+
+def price_at(dt):
+    return tou_period(dt)[2]
+
+
+def savings(rows, day_start, initial_kwh=0.0, initial_cost_per_kwh=None, max_gap_s=300):
+    """Money saved by the DPU system powering the house instead of the grid.
+
+    rows: [(datetime, load_w, grid_w, solar_w)] in time order (one per poll). Each reading
+    holds until the next one; gaps longer than max_gap_s (app was down) are not counted.
+    Power the system delivers to the house = load - grid. Solar covering it directly is free;
+    the rest comes out of the battery at the average cost of what's stored in it. Energy going
+    in costs the grid price at that time (solar: free) and only ROUND_TRIP of it comes back out.
+    Battery contents before the first row are assumed grid-charged off-peak (initial_cost_per_kwh).
+    Returns dollars (today, total), kWh delivered to the house (today_kwh, total_kwh), and
+    by_day {"YYYY-MM-DD": [dollars, kwh]}.
+    """
+    if initial_cost_per_kwh is None:
+        initial_cost_per_kwh = EV2A["winter"]["off-peak"] / ROUND_TRIP
+    pool_kwh, pool_cost = initial_kwh, initial_kwh * initial_cost_per_kwh
+    out = {"today": 0.0, "total": 0.0, "today_kwh": 0.0, "total_kwh": 0.0, "by_day": {}}
+    for (t, load, grid, solar), (t_next, *_) in zip(rows, rows[1:]):
+        dt_s = (t_next - t).total_seconds()
+        if dt_s <= 0 or dt_s > max_gap_s or load is None or grid is None:
+            continue
+        h, price, solar = dt_s / 3600, price_at(t), solar or 0
+        to_house = max(0.0, load - grid)                 # W the system supplies to the house
+        direct = min(solar, to_house)                    # solar straight to the house: free
+        from_batt_kwh = (to_house - direct) * h / 1000
+        grid_in_kwh = max(0.0, grid - load) * h / 1000   # grid draw beyond the house = charging
+        solar_in_kwh = max(0.0, solar - direct) * h / 1000
+        pool_kwh += (grid_in_kwh + solar_in_kwh) * ROUND_TRIP
+        pool_cost += grid_in_kwh * price
+        avg = pool_cost / pool_kwh if pool_kwh > 0 else initial_cost_per_kwh
+        used_cost = from_batt_kwh * avg
+        pool_kwh, pool_cost = max(0.0, pool_kwh - from_batt_kwh), max(0.0, pool_cost - used_cost)
+        delivered = direct * h / 1000 + from_batt_kwh
+        saved = delivered * price - used_cost
+        out["total"] += saved; out["total_kwh"] += delivered
+        day = out["by_day"].setdefault(t.date().isoformat(), [0.0, 0.0])
+        day[0] += saved; day[1] += delivered
+        if t >= day_start:
+            out["today"] += saved; out["today_kwh"] += delivered
+    return out
