@@ -104,6 +104,15 @@ class Commands(Base):
         full = {h: 0.0001 for h in range(7, 17)}                                 # every daylight hour learned, tiny
         self.assertIn("little sun", server.run_balance(s, server.effective(s), at(8, 30), hourly, True, full)["why"])
 
+    def test_day_uses_precise_battery_energy_only_for_the_whole_day(self):
+        for m, wh in ((0, 3000), (1, 3100), (2, 3200)):                 # Wh value recorded from the first reading
+            server.db.add_reading(at(9, m, day=5).timestamp(), 10, 0, 0, 0, 0, 0, remain_wh=wh)
+        self.assertAlmostEqual(server.day_data(at(9, day=5).date(), at(12), 30720)["report"]["stored_kwh"], 0.2)
+        server.db.add_reading(at(9, 0, day=4).timestamp(), 10, 0, 0, 0, 0, 0)          # before the upgrade: no Wh
+        for m, wh in ((30, 3000), (31, 3500)):                          # Wh only from half an hour later
+            server.db.add_reading(at(9, m, day=4).timestamp(), 10, 0, 0, 0, 0, 0, remain_wh=wh)
+        self.assertAlmostEqual(server.day_data(at(9, day=4).date(), at(12), 30720)["report"]["stored_kwh"], 0)  # falls back to %
+
     def test_records_solar_and_level_per_dpu(self):
         server.fetch()
         server.demo["batteries"][0].update(solarWatt=420, soc=55)

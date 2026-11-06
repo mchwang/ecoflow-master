@@ -47,7 +47,7 @@ class DB:
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.executescript(SCHEMA)
             # Columns added after the first release: add them to existing databases (old rows keep NULL).
-            for table, cols in {"readings": ["solar1_w REAL", "solar2_w REAL", "soc1 REAL", "soc2 REAL"],
+            for table, cols in {"readings": ["solar1_w REAL", "solar2_w REAL", "soc1 REAL", "soc2 REAL", "remain_wh REAL"],
                                 "daily_savings": ["solar1_kwh REAL", "solar2_kwh REAL", "cost_without REAL", "grid_cost REAL"]}.items():
                 have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
                 for col in cols:
@@ -64,10 +64,18 @@ class DB:
             self.conn.execute(sql, args)
 
     def add_reading(self, ts, soc, solar_w, load_w, grid_w, forecast_ghi, charging,
-                    solar1_w=None, solar2_w=None, soc1=None, soc2=None):
+                    solar1_w=None, solar2_w=None, soc1=None, soc2=None, remain_wh=None):
         self._write("INSERT OR REPLACE INTO readings (ts, soc, solar_w, load_w, grid_w, forecast_ghi, charging,"
-                    " solar1_w, solar2_w, soc1, soc2) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                    (int(ts), soc, solar_w, load_w, grid_w, forecast_ghi, int(bool(charging)), solar1_w, solar2_w, soc1, soc2))
+                    " solar1_w, solar2_w, soc1, soc2, remain_wh) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (int(ts), soc, solar_w, load_w, grid_w, forecast_ghi, int(bool(charging)), solar1_w, solar2_w, soc1, soc2, remain_wh))
+
+    def stored_wh(self, since_ts, until_ts):
+        """((first_ts, wh), (last_ts, wh)) of battery energy recorded in [since, until), or None if fewer than two
+        readings have it. The panel reports it to the Wh; the % level is whole numbers only (1% = ~300 Wh here)."""
+        with self.lock:
+            rows = self.conn.execute("SELECT ts, remain_wh FROM readings WHERE ts >= ? AND ts < ? AND remain_wh IS NOT NULL ORDER BY ts",
+                                     (int(since_ts), int(until_ts))).fetchall()
+        return (rows[0], rows[-1]) if len(rows) >= 2 else None
 
     def save_weather(self, rows, now):
         """rows: [(hour_end_ts, ghi, direct, diffuse, cloud, temp)]; newer fetches replace older ones."""

@@ -142,6 +142,9 @@
   @media (max-width:440px) { .daynav { margin-left:0; width:100%; } .daynav button { min-width:40px; padding:0 10px; }
     .daynav input[type=date] { flex:1 1 auto; padding:8px 6px; } }
   .subh { font-size:14px; color:var(--mute); text-transform:uppercase; letter-spacing:.06em; margin:18px 0 8px; font-weight:600; }
+  .ebar { display:flex; height:14px; border-radius:3px; overflow:hidden; background:var(--track); margin:4px 0 12px; }
+  .ebar i { display:block; height:100%; background:var(--c); box-shadow:0 0 calc(var(--glow) * 10px) color-mix(in srgb, var(--c) 50%, transparent); }
+  .ebar i + i { border-left:2px solid var(--bg); }
   .sankey { display:block; width:100%; min-width:620px; height:280px; }
   .sankey text { fill:var(--fg); font:600 13px "Exo 2", system-ui, sans-serif; }
   .sankey text.s { fill:var(--mute); font-weight:500; font-size:12px; }
@@ -426,6 +429,9 @@
     <h3 class="subh">Energy flow</h3>
     <div class="fc-wrap"><svg id="sankey" class="sankey" role="img"></svg></div>
     <p class="caption">Where the day's energy came from (left) and went (right). Grid power is split by PG&amp;E period with what it cost.</p>
+    <h3 class="subh">Energy balance</h3>
+    <div class="ebar" id="ebar" role="img"></div>
+    <div class="facts" id="ebal"></div>
     <h3 class="subh">Savings</h3>
     <div class="facts" id="sv-day"></div>
   </section>
@@ -710,6 +716,7 @@ function renderDay(r) {
     $('hr' + i).setAttribute('aria-label', `${name} kWh per hour: ` + hrs.map((h, k) => `${t12(k + ':00')} ${h[i].toFixed(2)}`).join('; '));
   });
   drawSankey(rep, r.readings);
+  drawBalance(rep, r.readings);
   const sv = last?.savings, m = v => (v < 0 ? '−$' : '$') + Math.abs(v).toFixed(2);
   $('sv-day').innerHTML = [
     [`Cost without the system`, m(rep.cost_without), 'house all from grid at PG&E prices'],
@@ -718,6 +725,23 @@ function renderDay(r) {
     ['This month', sv ? m(sv.total) : '–', sv ? `${m(sv.monthWithout)} → ${m(sv.monthGrid)}` : ''],
     ['All time', sv ? m(sv.allTime) : '–', sv ? `${sv.days} day${sv.days === 1 ? '' : 's'} since ${sv.since}` : ''],
     ['Est. per year', sv?.annual != null ? m(sv.annual) : '–', sv?.annual != null ? 'from the daily average so far' : 'after a week of history'],
+  ].map(([k, v, sub]) => `<div class="fact"><div><span class="label">${k}</span><b class="num">${v}</b><span class="mute" style="font-size:13px">${sub}</span></div></div>`).join('');
+}
+function drawBalance(rep, n) {
+  // Every kWh that came in (grid + solar + earlier battery charge) ends up in the home, the battery, or lost.
+  const f = v => `${v.toFixed(1)} kWh`, inn = rep.energy_in, gridIn = Object.values(rep.grid_kwh).reduce((a, b) => a + b, 0);
+  const parts = [['Home', rep.home_kwh, 'var(--home)'], ['Stored', rep.stored_kwh, 'var(--batt)'], ['Losses', rep.losses_kwh, 'var(--bad)']];
+  const tot = parts.reduce((a, p) => a + p[1], 0);
+  $('ebar').innerHTML = n && tot > 0 ? parts.filter(p => p[1] > 0).map(([k, v, c]) =>
+    `<i style="--c:${c};width:${v / tot * 100}%" data-tip="${esc(`<b>${k}</b><div><span>Energy</span><span>${f(v)}</span></div><div><span>Share</span><span>${(v / tot * 100).toFixed(1)}%</span></div>`)}"></i>`).join('') : '';
+  $('ebar').setAttribute('aria-label', parts.map(([k, v]) => `${k} ${f(v)}`).join(', '));
+  const gap = rep.balance_kwh < -0.05;  // meters say slightly more came out than went in
+  $('ebal').innerHTML = !n ? '<span class="mute">No readings for this day.</span>' : [
+    ['Energy in', f(inn), `grid ${f(gridIn)} + solar ${f(rep.solar_kwh)}` + (rep.drawn_kwh > 0.05 ? ` + battery ${f(rep.drawn_kwh)}` : '')],
+    ['Home used', f(rep.home_kwh), inn ? `${Math.round(rep.home_kwh / inn * 100)}% of energy in` : ''],
+    [rep.drawn_kwh > 0.05 ? 'Drawn from battery' : 'Stored in battery', f(rep.drawn_kwh > 0.05 ? rep.drawn_kwh : rep.stored_kwh), rep.drawn_kwh > 0.05 ? 'used charge from earlier' : 'charge gained today'],
+    gap ? ['Meter gap', f(-rep.balance_kwh), 'readings disagree slightly; no loss shown'] : ['Losses', f(rep.losses_kwh), `${rep.loss_pct.toFixed(1)}% of energy in (charging, inverter)`],
+    ['Battery efficiency', rep.batt_eff == null ? '–' : `${rep.batt_eff.toFixed(0)}%`, rep.batt_eff == null ? (gap ? 'unknown while the meters disagree' : 'not enough charging this day') : 'of the energy charged in, kept or delivered'],
   ].map(([k, v, sub]) => `<div class="fact"><div><span class="label">${k}</span><b class="num">${v}</b><span class="mute" style="font-size:13px">${sub}</span></div></div>`).join('');
 }
 function drawSankey(rep, n) {
