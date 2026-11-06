@@ -152,6 +152,20 @@ def day_data(day, now, cap_wh):
             "solarDpu": [round(x, 2) for x in solar], "report": _rounded(day_report([(*r[:5], r[7]) for r in rows], cap_wh))}
 
 
+def today_solar_kw(now, max_gap_s=300):
+    """Measured solar so far today: {hour: average kW over the minutes with readings}.
+    Hours with under 10 minutes of readings (app down, or the hour just started) are left out, not shown as 0."""
+    start = datetime.combine(now.date(), datetime.min.time(), TZ)
+    rows = [(datetime.fromtimestamp(ts, TZ), solar) for ts, _, _, _, solar, *_ in db.readings_since(start.timestamp(), now.timestamp() + 1)]
+    ws, secs = [0.0] * 24, [0.0] * 24
+    for (t, w), (t_next, _) in zip(rows, rows[1:]):
+        dt = (t_next - t).total_seconds()
+        if 0 < dt <= max_gap_s:
+            ws[t.hour] += (w or 0) * dt
+            secs[t.hour] += dt
+    return {h: round(ws[h] / secs[h] / 1000, 2) for h in range(24) if secs[h] >= 600}
+
+
 def refresh_savings(now, cap_wh):
     """Store today's totals (and any day this month not yet stored the new way) in daily_savings,
     then summarize today, this month and all time for the page."""
@@ -513,7 +527,9 @@ def tick(now=None):
         saved = refresh_savings(now, c["capacity_wh"])
         state["cap_wh"] = c["capacity_wh"]
         # Open-Meteo values are the mean of the hour ending at t, so label each bar with the hour it covers.
-        forecast = [{"hour": f"{t - timedelta(hours=1):%H}", "cloud": cc, "ghi": round(ghi or 0), "kw": round((ghi or 0) / 1000 * profile.get((t - timedelta(hours=1)).hour, fallback_kw), 2)}
+        actual = today_solar_kw(now)
+        forecast = [{"hour": f"{t - timedelta(hours=1):%H}", "cloud": cc, "ghi": round(ghi or 0), "kw": round((ghi or 0) / 1000 * profile.get((t - timedelta(hours=1)).hour, fallback_kw), 2),
+                     "actual": actual.get((t - timedelta(hours=1)).hour)}
                     for t, ghi, cc in (w["hourly"] if w else []) if (t - timedelta(hours=1)).date() == now.date() and (ghi or 0) > 0]
         state.update(status=s, raw=raw, error=weather["error"], updated=now.isoformat(timespec="seconds"), decision={
             "charge": charge, "kind": d["kind"], "reason": reason, "startAt": start_at and start_at.strftime("%H:%M"),
