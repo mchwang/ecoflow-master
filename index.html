@@ -108,9 +108,9 @@
 
   .fc-wrap { overflow-x:auto; margin-bottom:6px; }
   .fc { display:flex; gap:6px; align-items:flex-end; min-height:130px; padding-top:4px; }
-  .fc .col { display:grid; justify-items:center; gap:2px; min-width:48px; font-size:12px; color:var(--mute); }
+  .fc .col { flex:1 1 0; display:grid; justify-items:center; gap:2px; min-width:48px; font-size:12px; color:var(--mute); }
   .fc .kw { color:var(--fg); font-weight:600; }
-  .fc i { display:block; width:26px; border-radius:6px 6px 2px 2px; min-height:2px; transform-origin:bottom;
+  .fc i { display:block; width:min(70%, 56px); border-radius:6px 6px 2px 2px; min-height:2px; transform-origin:bottom;
           background:linear-gradient(180deg, var(--solar), color-mix(in srgb, var(--solar) 55%, #f97316)); }
   .fc.grow i { animation:grow .7s cubic-bezier(.2,.7,.3,1) both; animation-delay:calc(var(--k) * 45ms); }
   @keyframes grow { from { transform:scaleY(0); } }
