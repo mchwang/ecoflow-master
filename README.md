@@ -24,6 +24,7 @@ Settings are saved to `config.json`. The EV2-A prices in `planner.py` are the 20
 - `homepower.db` (SQLite):
   - `readings`: one row per minute with battery %, solar W, load W, grid W, forecast sunlight, and whether grid charging is on
   - `events`: the activity log
+  - `daily_savings`: one row per day with dollars saved and kWh the system delivered to the house. This month is recalculated every minute from `readings`; earlier months stay as stored. `GET /api/savings` returns the history.
 - `config.json`: dashboard settings and automation state.
 
 The solar learning reads the last 14 days of `readings`. Growth is about 0.5M rows (~30 MB) a year.

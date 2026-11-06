@@ -17,6 +17,12 @@ CREATE TABLE IF NOT EXISTS events (
     ts INTEGER NOT NULL,
     msg TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS daily_savings (   -- grid cost avoided per local day (see planner.savings)
+    day TEXT PRIMARY KEY,        -- YYYY-MM-DD, Pacific time
+    saved REAL NOT NULL,         -- dollars
+    kwh REAL NOT NULL,           -- energy the system delivered to the house
+    updated INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS lease (   -- which copy of the app may send automatic commands (one row)
     id INTEGER PRIMARY KEY CHECK (id = 1),
     holder TEXT NOT NULL,
@@ -74,3 +80,20 @@ class DB:
         with self.lock:
             row = self.conn.execute("SELECT holder, renewed FROM lease WHERE id = 1").fetchone()
         return row[0] if row and row[1] >= now - ttl else None
+
+    def readings_since(self, since_ts):
+        """[(ts, soc, load_w, grid_w, solar_w)] oldest first."""
+        with self.lock:
+            return self.conn.execute(
+                "SELECT ts, soc, load_w, grid_w, solar_w FROM readings WHERE ts >= ? ORDER BY ts", (int(since_ts),)).fetchall()
+
+    def save_daily_savings(self, by_day, now):
+        with self.lock, self.conn:
+            self.conn.executemany("INSERT OR REPLACE INTO daily_savings VALUES (?, ?, ?, ?)",
+                                  [(d, round(v[0], 4), round(v[1], 4), int(now)) for d, v in by_day.items()])
+
+    def daily_savings(self, since_day="0000-00-00"):
+        """[(day, saved, kwh)] oldest first."""
+        with self.lock:
+            return self.conn.execute("SELECT day, saved, kwh FROM daily_savings WHERE day >= ? ORDER BY day",
+                                     (since_day,)).fetchall()

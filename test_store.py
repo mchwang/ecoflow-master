@@ -30,6 +30,16 @@ class Store(unittest.TestCase):
         self.assertEqual(d.recent_events(2), [(2, "e2"), (1, "e1")])
 
 
+class DailySavings(unittest.TestCase):
+    def test_upsert_keeps_history(self):
+        d = DB(Path(TMP) / "t4.db")
+        d.save_daily_savings({"2026-10-31": [1.5, 6.0]}, 1)
+        d.save_daily_savings({"2026-11-01": [0.2, 1.0]}, 2)
+        d.save_daily_savings({"2026-11-01": [0.5, 2.0]}, 3)  # same day recomputed: replaced, not added
+        self.assertEqual(d.daily_savings(), [("2026-10-31", 1.5, 6.0), ("2026-11-01", 0.5, 2.0)])
+        self.assertEqual(d.daily_savings("2026-11-01"), [("2026-11-01", 0.5, 2.0)])
+
+
 class Lease(unittest.TestCase):
     def test_latest_claim_wins_and_expiry_fails_over(self):
         d = DB(Path(TMP) / "t3.db")

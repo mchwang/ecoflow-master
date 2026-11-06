@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 
 from db import DB
 from ecoflow_api import SSL_CTX, EcoFlow
-from planner import deadline_of, decide, hm12, fit_array_kw, solar_wh, tou_period
+from planner import ROUND_TRIP, deadline_of, decide, hm12, price_at, savings, fit_array_kw, solar_wh, tou_period
 
 HERE = Path(__file__).parent
 TZ = ZoneInfo("America/Los_Angeles")
@@ -116,6 +116,23 @@ def update_control(s, force=False):
         log(f"{INSTANCE} on standby: {holder or 'control referee unreachable'} is in control")
     state.update(leader=leader, holder=holder)
     return leader
+
+
+def month_savings(now, capacity_wh):
+    """Savings today and this month, replayed from this month's readings (~45k rows max, fast enough per poll)."""
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    rows = db.readings_since(month_start.timestamp())
+    if not rows:
+        return None
+    first_soc = rows[0][1] or 0
+    r = savings([(datetime.fromtimestamp(ts, TZ), load, grid, solar) for ts, _, load, grid, solar in rows],
+                now.replace(hour=0, minute=0, second=0, microsecond=0),
+                initial_kwh=first_soc / 100 * capacity_wh / 1000,
+                initial_cost_per_kwh=price_at(month_start.replace(hour=1)) / ROUND_TRIP)  # unknown origin: assume off-peak grid
+    db.save_daily_savings(r.pop("by_day"), now.timestamp())  # this month's days; earlier months stay as stored
+    history = db.daily_savings()
+    return {k: round(v, 2) for k, v in r.items()} | {
+        "allTime": round(sum(d[1] for d in history), 2), "days": len(history), "since": history[0][0] if history else None}
 
 
 def learned_kw(now, max_soc):
@@ -287,6 +304,7 @@ def tick():
         else:
             state["lastWould"] = None
         period, season, price = tou_period(now)
+        saved = month_savings(now, c["capacity_wh"])
         forecast = [{"hour": f"{t:%H}", "cloud": cc, "ghi": round(ghi or 0), "kw": round((ghi or 0) / 1000 * c["pv_kw"] * c["pv_pr"], 2)}
                     for t, ghi, cc in (w["hourly"] if w else []) if t.date() == now.date() and (ghi or 0) > 0]
         state.update(status=s, raw=raw, error=weather["error"], updated=now.isoformat(timespec="seconds"), decision={
@@ -294,7 +312,7 @@ def tick():
             "projectedSoc": d["projected_soc"], "solarKwh": round(pv_wh / 1000, 1),
             "sunrise": w and w["sunrise"], "sunset": w and w["sunset"], "forecast": forecast,
             "period": period, "season": season, "price": price, "effective": c,
-        }, control={"instance": INSTANCE, "holder": state.get("holder"), "leader": leader,
+        }, savings=saved, control={"instance": INSTANCE, "holder": state.get("holder"), "leader": leader,
                     "referee": LEADER_URL or "this copy", "error": state.get("leaseError")})
 
 
@@ -345,6 +363,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             self.wfile.write(body)
+        elif self.path == "/api/savings":  # daily history: [{day, saved, kwh}]
+            self._json([{"day": d, "saved": round(v, 2), "kwh": round(k, 2)} for d, v, k in db.daily_savings()])
         elif self.path == "/api/state":
             self._json({**state, "config": cfg, "demo": DEMO})
         else:
