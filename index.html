@@ -91,6 +91,10 @@
   .stack > .card { display:flex; flex-direction:column; }  /* fill the row beside the energy flow */
   table.compact td { padding:6px; }
   .bats { display:grid; gap:14px; margin-bottom:14px; }
+  .bfacts { display:grid; gap:10px; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); margin-bottom:14px; }
+  .bfacts div { border:1px solid var(--line); border-radius:10px; padding:8px 10px; background:var(--card2); }
+  .bfacts span { display:block; color:var(--mute); font-size:13px; } .bfacts b { font-size:16px; }
+  .bfacts small { color:var(--mute); font-size:13px; }
   .bal { margin:auto 0 0; padding-top:12px; border-top:1px solid var(--line); font-size:14px; display:flex; gap:8px; align-items:flex-start; color:var(--mute); }
   .bal b { color:var(--fg); font-weight:600; }
   .batt { display:grid; grid-template-columns:auto 1fr auto; gap:12px; align-items:center; }
@@ -276,6 +280,7 @@
       <div class="card">
         <h2><svg class="ic sm"><use href="#i-battery"/></svg>Batteries</h2>
         <div class="bats" id="bats"></div>
+        <div class="bfacts" id="bfacts"></div>
         <p class="bal" id="bal" hidden></p>
       </div>
     </div>
@@ -539,6 +544,12 @@ async function refresh() {
       : 'No forecast');
   }
 
+  const resWh = (s.backupReserveSoc || 0) / 100 * (s.fullCapWh || 0), resMin = s.loadWatt ? resWh / s.loadWatt * 60 : null;
+  $('bfacts').innerHTML = [
+    ['Outage reserve', `${s.backupReserveSoc ?? '–'}% · ${(resWh / 1000).toFixed(1)} kWh`, resMin ? `~${Math.floor(resMin / 60)}h ${Math.round(resMin % 60)}m at current load` : ''],
+    ['Max charge level', `${s.maxChargeSoc ?? '–'}%`, 'panel stops charging here'],
+    ['Grid charge power', w(s.chargeWattPower), 'used to time grid charging']]
+    .map(([k, v, sub]) => `<div><span>${k}</span><b class="num">${v}</b>${sub ? `<br><small>${sub}</small>` : ''}</div>`).join('');
   $('bats').innerHTML = s.batteries.map(b => `<div class="batt">
       <span class="badge" style="--c:${b.enabled === 0 ? 'var(--mute)' : 'var(--batt)'}">${icon(on(b.forceCharge) ? 'bolt-batt' : 'battery', 'ic')}</span>
       <div><div class="name">DPU ${b.n} <span class="mute" style="font-weight:400">· ${b.fullCapWh ? (b.fullCapWh/1000).toFixed(1) + ' kWh' : '–'}</span></div>
