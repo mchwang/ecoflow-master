@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from ecoflow_api import sign
-from planner import ROUND_TRIP, afternoon_sun, balance, daily_solar_kwh, decide, fit_hourly_kw, solar_wh_hourly, target_soc, fit_array_kw, hm12, savings, solar_wh, tou_period
+from planner import ROUND_TRIP, afternoon_sun, balance, daily_solar_kwh, decide, fit_hourly_kw, hourly_kwh, solar_wh_hourly, target_soc, fit_array_kw, hm12, savings, solar_wh, tou_period
 
 TZ = ZoneInfo("America/Los_Angeles")
 CFG = {"capacity_wh": 30720, "charge_w": 4000, "min_soc": 60, "max_soc": 95,
@@ -83,6 +83,17 @@ class PerDpuSolar(unittest.TestCase):
         r = daily_solar_kwh(rows)
         self.assertAlmostEqual(r["2026-11-06"][0], 2 * 1000 / 60 / 1000)
         self.assertAlmostEqual(r["2026-11-06"][1], 2 * 3000 / 60 / 1000)
+
+    def test_hourly_solar_home_grid(self):
+        # 9:59 -> 10:01 straddles the hour; None solar counts as 0; grid export (negative) isn't "from grid"
+        rows = [(at(9, 59), 600, 1200, 600), (at(10, 0), None, 1200, -300), (at(10, 1), 0, 0, 0), (at(13), 0, 0, 0)]
+        h = hourly_kwh(rows)
+        self.assertEqual(len(h), 24)
+        for got, want in zip(h[9], [600 / 60e3, 1200 / 60e3, 600 / 60e3]):
+            self.assertAlmostEqual(got, want)
+        for got, want in zip(h[10], [0, 1200 / 60e3, 0]):
+            self.assertAlmostEqual(got, want)
+        self.assertEqual(h[12], [0.0, 0.0, 0.0])                                 # 3 h gap isn't counted
 
 
 class Balance(unittest.TestCase):

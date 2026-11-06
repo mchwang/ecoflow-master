@@ -138,6 +138,19 @@ def daily_solar_kwh(rows, max_gap_s=300):
     return out
 
 
+def hourly_kwh(rows, max_gap_s=300):
+    """rows: one day's [(datetime, solar_w, load_w, grid_w)] in time order -> 24 x [solar, home, from-grid] kWh.
+    Same counting as daily_solar_kwh; grid export (negative) is not counted as drawn from the grid."""
+    out = [[0.0, 0.0, 0.0] for _ in range(24)]
+    for (t, solar, load, grid), (t_next, *_) in zip(rows, rows[1:]):
+        dt_s = (t_next - t).total_seconds()
+        if 0 < dt_s <= max_gap_s:
+            h = out[t.hour]
+            for i, w in enumerate((solar, load, max(0, grid or 0))):
+                h[i] += (w or 0) * dt_s / 3.6e6
+    return out
+
+
 ROUND_TRIP = 0.8  # battery charge + discharge efficiency: 1 kWh in -> 0.8 kWh back out
 
 
