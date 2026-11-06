@@ -288,7 +288,7 @@
 
     <div class="facts">
       <div class="fact"><svg class="ic"><use href="#i-target"/></svg><div><span class="label" id="proj-l">Expected by deadline (no grid)</span><b class="num" id="proj">–</b></div></div>
-      <div class="fact"><svg class="ic"><use href="#i-sun"/></svg><div><span class="label">Solar before deadline</span><b class="num" id="pvkwh">–</b></div></div>
+      <div class="fact"><svg class="ic"><use href="#i-sun"/></svg><div><span class="label">Solar before deadline</span><b class="num" id="pvkwh">–</b><span class="mute" style="font-size:12px" id="pv-sub"></span></div></div>
       <div class="fact"><svg class="ic"><use href="#i-panel"/></svg><div><span class="label">Solar array</span><b class="num" id="array">–</b><span class="mute" style="font-size:12px" id="arraysrc"></span></div></div>
       <div class="fact"><svg class="ic"><use href="#i-sunrise"/></svg><div><span class="label">Daylight</span><b class="num" id="sun">–</b><span class="mute" style="font-size:12px" id="sun-after"></span></div></div>
     </div>
@@ -489,7 +489,7 @@ async function refresh() {
     $('sbadge').classList.toggle('glow', !!d.charge);
     $('sicon').setAttribute('href', d.charge ? '#i-bolt-batt' : d.startAt ? '#i-clock' : '#i-shield');
     const known = e.pv_kw > 0 || (e.profile_hours || []).some(n => n);
-    const end = t12(e.offpeak_end), sol = d.solarKwh > 0 ? `Solar adds about ${d.solarKwh} kWh`
+    const end = t12(e.offpeak_end), sol = d.solarKwh > 0 ? `Solar adds about ${d.solarKwh} kWh while the house uses about ${d.homeKwh} kWh`
       : known ? `No solar is expected before ${end}` : `Solar isn't counted yet (the array size is still being learned)`;
     const [title, why] = {
       outside: ['No grid charging now', `Power costs more until ${t12(e.offpeak_start)}. It only grid-charges from ${t12(e.offpeak_start)} to ${end}.`],
@@ -512,6 +512,7 @@ async function refresh() {
     $('proj').innerHTML = `${d.projectedSoc}% <span class="mute" style="font-size:13px;font-weight:400">min ${e.min_soc}%</span>`;
     $('proj').className = 'num ' + (d.projectedSoc >= e.min_soc ? 'ok' : 'warn');
     $('pvkwh').textContent = `${d.solarKwh} kWh`;
+    $('pv-sub').textContent = `Home uses ~${d.homeKwh} kWh by ${end}` + (d.wastedKwh > 0 ? ` · ~${d.wastedKwh} kWh wasted (battery full)` : '');
     $('array').textContent = e.pv_kw ? `${e.pv_kw} kW` : 'Not set';
     $('arraysrc').textContent = e.pv_source || '';
     $('sun-after').textContent = e.sun_after_wh == null ? 'No forecast: aiming higher to be safe'

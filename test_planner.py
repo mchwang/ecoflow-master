@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from ecoflow_api import sign
-from planner import ROUND_TRIP, afternoon_sun, balance, daily_solar_kwh, decide, fit_hourly_kw, hourly_kwh, solar_wh_hourly, target_soc, fit_array_kw, hm12, savings, solar_wh, tou_period
+from planner import ROUND_TRIP, afternoon_sun, balance, daily_solar_kwh, decide, fit_hourly_kw, hourly_kwh, room_target, simulate, solar_wh_hourly, target_soc, fit_array_kw, hm12, savings, solar_wh, tou_period
 
 TZ = ZoneInfo("America/Los_Angeles")
 CFG = {"capacity_wh": 30720, "charge_w": 4000, "min_soc": 60, "max_soc": 95,
@@ -149,6 +149,38 @@ class Savings(unittest.TestCase):
         self.assertAlmostEqual(r["today"], self.OFF); self.assertAlmostEqual(r["total"], 2 * self.OFF)
         self.assertEqual(sorted(r["by_day"]), ["2026-11-05", "2026-11-06"])
         self.assertAlmostEqual(r["by_day"]["2026-11-05"][0], self.OFF); self.assertAlmostEqual(r["by_day"]["2026-11-06"][1], 1.0)
+
+
+class Simulate(unittest.TestCase):
+    CAP = 10000  # 10 kWh battery: 1% = 100 Wh
+
+    def run_(self, soc, ghi, load, start=9, end=12, kw=1.0):
+        return simulate(at(start), at(end), soc, [(at(h), ghi) for h in range(1, 24)], {}, kw, {}, load, self.CAP, 10, 95)
+
+    def test_house_drains_battery_down_to_reserve_only(self):
+        r = self.run_(30, 0, 1000)                             # 3 h x 1 kW from a 30% battery: 30% -> stops at 10%
+        self.assertAlmostEqual(r["soc"], 10); self.assertAlmostEqual(r["wasted_wh"], 0)
+
+    def test_sun_beyond_house_charges_and_overflow_is_wasted(self):
+        r = self.run_(50, 1000, 500, kw=2.0)                   # +1.5 kW for 3 h = 4.5 kWh: 50% -> 95%, 0 kWh over
+        self.assertAlmostEqual(r["soc"], 95); self.assertAlmostEqual(r["wasted_wh"], 0)
+        r = self.run_(80, 1000, 500, kw=2.0)                   # 80% + 45% -> capped at 95%, 3 kWh wasted
+        self.assertAlmostEqual(r["soc"], 95); self.assertAlmostEqual(r["wasted_wh"], 3000)
+        self.assertAlmostEqual(r["solar_wh"], 6000); self.assertAlmostEqual(r["home_wh"], 1500)
+
+    def test_learned_load_per_hour(self):
+        r = simulate(at(9), at(11), 50, [], {}, 0, {9: 2000, 10: 0}, 500, self.CAP, 10, 95)  # 9-10 AM 2 kW, 10-11 AM 0
+        self.assertAlmostEqual(r["soc"], 30)
+
+    def test_target_leaves_room_for_afternoon_sun(self):
+        hourly = [(at(h), 1000 if 16 <= h <= 18 else 0) for h in range(1, 24)]  # sun 3-6 PM: 3 h x (2 kW - 0.5 kW)
+        t, room = room_target(80, at(15), hourly, {}, 2.0, {}, 500, self.CAP, 10, 95)
+        self.assertAlmostEqual(t, 50); self.assertAlmostEqual(room, 45)   # 4.5 kWh surplus needs 45% free at 3 PM
+        self.assertEqual(room_target(40, at(15), hourly, {}, 2.0, {}, 500, self.CAP, 10, 95)[0], 40)  # already fits
+
+    def test_decide_uses_simulated_level(self):
+        d = decide(at(6), 30, CFG, 5000, projected=20)         # sun would add, but the house uses more
+        self.assertEqual(d["projected_soc"], 20); self.assertEqual(d["kind"], "planned")
 
 
 class Planner(unittest.TestCase):

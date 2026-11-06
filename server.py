@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 
 from db import DB
 from ecoflow_api import SSL_CTX, EcoFlow
-from planner import ROUND_TRIP, afternoon_sun, balance, daily_solar_kwh, deadline_of, decide, hourly_kwh, target_soc, hm12, price_at, savings, fit_array_kw, fit_hourly_kw, solar_wh, solar_wh_hourly, tou_period
+from planner import ROUND_TRIP, afternoon_sun, balance, daily_solar_kwh, deadline_of, decide, hourly_kwh, room_target, simulate, target_soc, hm12, price_at, savings, fit_array_kw, fit_hourly_kw, solar_wh, solar_wh_hourly, tou_period
 
 HERE = Path(__file__).parent
 TZ = ZoneInfo("America/Los_Angeles")
@@ -162,6 +162,16 @@ def dpu_profiles(now, max_soc):
             for ts, s1, s2, c1, c2, g in db.dpu_samples(now.timestamp() - HISTORY_DAYS * 86400)]
     return (fit_hourly_kw([(h, s1, g, c1) for h, s1, _, c1, _, g in rows], max_soc),
             fit_hourly_kw([(h, s2, g, c2) for h, _, s2, _, c2, g in rows], max_soc))
+
+
+def load_profile(now, min_n=20):
+    """Usual home load (W) per hour of day over the last HISTORY_DAYS; hours with fewer readings are left out."""
+    acc = {}
+    for ts, _, load, *_ in db.readings_since(now.timestamp() - HISTORY_DAYS * 86400):
+        if load is not None:
+            a = acc.setdefault(datetime.fromtimestamp(ts, TZ).hour, [0.0, 0])
+            a[0] += load; a[1] += 1
+    return {h: a[0] / a[1] for h, a in acc.items() if a[1] >= min_n}
 
 
 def learned_kw(now, max_soc):
@@ -388,7 +398,16 @@ def tick(now=None):
         if profile:
             c["pv_source"] += f"; per-DPU hourly profile for {len(profile)} h"
         pv_wh = solar_wh_hourly(now, deadline, hourly, profile, fallback_kw)
-        d = decide(now, s["soc"], c, pv_wh, cfg["charging_by_us"])
+        # The panel runs the house from the battery at any hour (down to its backup reserve), so simulate that
+        # instead of assuming all solar is stored; and leave room at the deadline for the afternoon's spare sun.
+        loads, load_now = load_profile(now), s["loadWatt"] or 0
+        model = (hourly, profile, fallback_kw, loads, load_now, c["capacity_wh"], s["backupReserveSoc"] or 0, c["max_soc"])
+        c["min_soc"], room = room_target(c["min_soc"], deadline, *model)
+        if room and c["min_soc"] < target_soc(c, c["sun_after_wh"])[0]:
+            c["target_why"] += f"; lowered so {room:.0f}% of afternoon sun fits"
+        sim = simulate(now, deadline, s["soc"], *model)
+        c["load_hours"] = len(loads)
+        d = decide(now, s["soc"], c, pv_wh, cfg["charging_by_us"], projected=round(sim["soc"], 1))
         if now.timestamp() < cfg["manual_off_until"] and d["kind"] in ("planned", "charging"):
             d = {**d, "kind": "manual", "charge": False, "reason": "You turned grid charging off by hand; it stays off for today"}
         charge, reason, start_at = d["charge"], d["reason"], d["start_at"]
@@ -417,6 +436,7 @@ def tick(now=None):
         state.update(status=s, raw=raw, error=weather["error"], updated=now.isoformat(timespec="seconds"), decision={
             "charge": charge, "kind": d["kind"], "reason": reason, "startAt": start_at and start_at.strftime("%H:%M"),
             "projectedSoc": d["projected_soc"], "solarKwh": round(pv_wh / 1000, 1),
+            "homeKwh": round(sim["home_wh"] / 1000, 1), "wastedKwh": round(sim["wasted_wh"] / 1000, 1),
             "sunrise": w and w["sunrise"], "sunset": w and w["sunset"], "forecast": forecast,
             "period": period, "season": season, "price": price, "effective": c,
         }, savings=saved, balance=bal, control={"instance": INSTANCE, "holder": state.get("holder"), "leader": leader,
