@@ -510,18 +510,18 @@ function stream(id, watts, reverse = false) {
 function drawFlow(s, d) {
   const solar = s.solarWatt || 0, grid = s.gridWatt || 0, load = s.loadWatt || 0;
   const gridCharging = s.batteries.some(b => b.enabled !== 0 && on(b.forceCharge));
-  const battW = s.batteries.reduce((a, b) => a + Math.abs(b.watt || 0), 0);
+  const net = solar + (s.gridOnline ? grid : 0) - load;  // into the batteries (+) or out (-); matches panel channel W + solar
   const discharging = !s.gridOnline || load - grid > 50;
   const charging = !discharging && (gridCharging || solar > 5);
   stream('s-solar', solar, false);                  // solar -> hub
   stream('s-grid', s.gridOnline ? grid : 0, false); // grid -> hub
   stream('s-home', load, false);                    // hub -> home
-  stream('s-batt', charging || discharging ? Math.max(battW, 50) : 0, discharging);  // hub -> battery, or back when discharging
+  stream('s-batt', charging || discharging ? Math.max(Math.abs(net), 50) : 0, discharging);  // hub -> battery, or back when discharging
   $('solar-glow').setAttribute('opacity', solar > 5 ? 1 : 0);
   $('t-solar').textContent = w(solar);
   $('t-grid').textContent = s.gridOnline ? w(grid) : 'Offline';
   $('t-home').textContent = w(load);
-  $('t-batt').textContent = `${s.soc}% · ${charging ? 'charging' : discharging ? 'discharging' : 'idle'}`;
+  $('t-batt').textContent = `${s.soc}% · ${charging ? `charging ${w(Math.max(net, 0))}` : discharging ? `discharging ${w(Math.max(-net, 0))}` : 'idle'}`;
   $('batt-ic').setAttribute('href', charging ? '#i-bolt-batt' : '#i-battery');
   const C = 2 * Math.PI * 32;
   $('soc-ring').style.strokeDashoffset = (C * (1 - s.soc / 100)).toFixed(1);
