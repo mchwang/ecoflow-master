@@ -76,12 +76,13 @@ state = {"status": None, "decision": None, "error": None, "updated": None,
 weather = {"at": 0, "key": None, "data": None, "error": None}
 
 
-def lease(force=False):
-    """Claim/renew control. Returns the holder's name, or None if the referee is unreachable (= standby)."""
+def lease(force=False, peek=False):
+    """Claim/renew control (or with peek, only look). Returns the holder's name, or None if
+    nobody holds it / the referee is unreachable (= standby)."""
     if not LEADER_URL:
-        return db.claim_lease(INSTANCE, time.time(), LEASE_TTL, force)
+        return db.peek_lease(time.time(), LEASE_TTL) if peek else db.claim_lease(INSTANCE, time.time(), LEASE_TTL, force)
     req = urllib.request.Request(LEADER_URL + "/api/lease", method="POST",
-                                 data=json.dumps({"holder": INSTANCE, "force": force}).encode(),
+                                 data=json.dumps({"holder": INSTANCE, "force": force, "peek": peek}).encode(),
                                  headers={"Content-Type": "application/json", "Authorization": LEADER_AUTH})
     try:
         with urllib.request.urlopen(req, timeout=10, context=SSL_CTX) as r:
@@ -92,10 +93,15 @@ def lease(force=False):
 
 
 def update_control(s, force=False):
-    holder = lease(force)
-    leader = holder == INSTANCE
-    if holder is not None:
-        state["leaseError"] = None
+    # Only a copy in Auto competes for control; Off/Dry-run copies just look, so they never
+    # take control away from the copy that is actually automating.
+    auto = cfg["mode"] == "auto"
+    state["leaseError"] = None
+    holder = lease(force=force) if auto else lease(peek=True)
+    leader = auto and holder == INSTANCE
+    if not auto:
+        state.update(leader=False, holder=holder)
+        return False
     if leader and not state.get("leader"):
         # Adopt the panel's current force-charge state, so we can turn off a charge the previous controller started.
         cfg["charging_by_us"] = any(b["forceCharge"] == "FORCE_CHARGE_ON" for b in s["batteries"] if b["enabled"] != 0)
@@ -350,6 +356,7 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
             if self.path == "/api/config":
                 with lock:
+                    to_auto = body.get("mode") == "auto" and cfg["mode"] != "auto"
                     for k, v in body.items():
                         if k == "mode" and v in ("off", "dry-run", "auto"):
                             cfg[k] = v
@@ -364,16 +371,22 @@ class Handler(BaseHTTPRequestHandler):
                             raise ValueError(f"unknown or invalid setting {k}")
                     save_cfg()
                     log(f"Settings changed: {body}")
+                    if to_auto and state["status"]:  # switching to Auto takes control (latest wins)
+                        update_control(state["status"], force=True)
             elif self.path == "/api/lease":  # other copies ask this referee for control
                 if LEADER_URL:
                     raise ValueError("this copy is not the control referee")
                 holder = str(body.get("holder", ""))[:64]
                 if not holder:
                     raise ValueError("holder required")
+                if body.get("peek"):
+                    return self._json({"holder": db.peek_lease(time.time(), LEASE_TTL)})
                 return self._json({"holder": db.claim_lease(holder, time.time(), LEASE_TTL, bool(body.get("force")))})
             elif self.path == "/api/take-control":
                 if state["status"] is None:
                     raise ValueError("no panel data yet")
+                if cfg["mode"] != "auto":
+                    raise ValueError("switch this copy to Auto to take control")
                 with lock:
                     update_control(state["status"], force=True)
             elif self.path == "/api/force":
@@ -398,8 +411,8 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8787))
     print(f"{'DEMO mode' if DEMO else 'Panel ' + (SN or 'auto-detect')} - http://{HOST}:{port} - data in {DATA_DIR}"
           + (" - login required" if PASSWORD else ""), flush=True)
-    # Starting up claims control: the most recently started copy wins.
-    holder = lease(force=True)
+    # Starting up in Auto claims control: the most recently started Auto copy wins.
+    holder = lease(force=True) if cfg["mode"] == "auto" else lease(peek=True)
     print(f"Control: {INSTANCE} {'took control' if holder == INSTANCE else 'on standby, holder: ' + str(holder)}"
           f" (referee: {LEADER_URL or 'this copy'})", flush=True)
     threading.Thread(target=loop, daemon=True).start()

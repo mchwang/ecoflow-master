@@ -68,3 +68,9 @@ class DB:
                 self.conn.execute("INSERT OR REPLACE INTO lease VALUES (1, ?, ?)", (holder, int(now)))
                 return holder
             return row[0]
+
+    def peek_lease(self, now, ttl):
+        """Current holder without claiming, or None if nobody renewed within `ttl` s."""
+        with self.lock:
+            row = self.conn.execute("SELECT holder, renewed FROM lease WHERE id = 1").fetchone()
+        return row[0] if row and row[1] >= now - ttl else None
