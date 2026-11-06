@@ -213,7 +213,9 @@ def summarize(d):
         bats.append({"n": n, "soc": soc, "watt": watts[n - 1] if len(watts) >= n else None,
                      "fullCapWh": q(d, f"backupIncreInfo.Energy{n}Info.devInfo.fullCap"),
                      "temp": q(d, f"backupIncreInfo.Energy{n}Info.emsBatTemp"),
-                     "solarWatt": q(d, f"backupIncreInfo.Energy{n}Info.pvChargeWatts"),
+                     # high- plus low-voltage PV input (matches the DPU's own inHv/inLvMpptPwr);
+                     # pvChargeWatts is not watts: it reads 3 whatever the output
+                     "solarWatt": sum(q(d, f"backupIncreInfo.Energy{n}Info.pv{x}ChargeWatts") or 0 for x in ("Height", "Low")),
                      "enabled": q(d, f"ch{n}EnableSet"), "forceCharge": q(d, f"ch{n}ForceCharge")})
     hall = q(d, "loadInfo.hall1Watt", []) or []
     circuits = []

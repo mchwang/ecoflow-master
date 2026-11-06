@@ -51,7 +51,10 @@ class PerDpuAndWeather(unittest.TestCase):
         c.commit(); c.close()
         d = DB(path)
         d.add_reading(200, 51, 500, 700, 200, 450, 0, 120, 380, 52, 49)
-        self.assertEqual(d.readings_since(0), [(100, 50, 700, 700, 300, None, None), (200, 51, 700, 200, 500, 120, 380)])
+        # old solar came from the wrong panel field, so it is cleared once; later readings are kept
+        self.assertEqual(d.readings_since(0), [(100, 50, 700, 700, None, None, None), (200, 51, 700, 200, 500, 120, 380)])
+        d.conn.close()
+        self.assertEqual(DB(path).readings_since(0)[-1], (200, 51, 700, 200, 500, 120, 380))
 
     def test_learning_uses_stored_weather_then_forecast(self):
         d = DB(Path(TMP) / "t5.db")

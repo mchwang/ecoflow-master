@@ -194,6 +194,11 @@ class PanelData(unittest.TestCase):
             "pd303_mc.backupIncreInfo.Energy2Info.batteryPercentage": 10, "pd303_mc.backupIncreInfo.Energy2Info.devInfo.fullCap": 12288,
             "pd303_mc.backupIncreInfo.Energy3Info.batteryPercentage": 0, "pd303_mc.backupIncreInfo.Energy3Info.devInfo.fullCap": 0,
             "pd303_mc.backupIncreInfo.Energy3Info.isConnect": 1, "ch1EnableSet": 1, "ch2EnableSet": 1, "ch3EnableSet": 0,
+            # solar = high-voltage + low-voltage PV input; pvChargeWatts is not watts (reads 3 at any output)
+            "pd303_mc.backupIncreInfo.Energy1Info.pvChargeWatts": 3, "pd303_mc.backupIncreInfo.Energy1Info.pvHeightChargeWatts": 117,
+            "pd303_mc.backupIncreInfo.Energy1Info.pvLowChargeWatts": 0,
+            "pd303_mc.backupIncreInfo.Energy2Info.pvChargeWatts": 3, "pd303_mc.backupIncreInfo.Energy2Info.pvHeightChargeWatts": 423,
+            "pd303_mc.backupIncreInfo.Energy2Info.pvLowChargeWatts": 34,
             "wattInfo.gridWatt": 713.0, "wattInfo.allHallWatt": 713.0, "pd303_mc.masterIncreInfo.gridSta": 1,
             "foceChargeHight": 95, "loadInfo.hall1Watt": [231.6, 156.8],
             "pd303_mc.loadIncreInfo.hall1IncreInfo.ch1Info.chName": "Office/Bedroom 4",
@@ -202,6 +207,7 @@ class PanelData(unittest.TestCase):
         self.assertEqual([b["n"] for b in s["batteries"]], [1, 2])   # empty slot 3 skipped
         self.assertEqual((s["soc"], s["fullCapWh"], s["maxChargeSoc"], s["gridOnline"]), (12, 30720, 95, 1))
         self.assertEqual(s["circuits"][0]["name"], "Office/Bedroom 4")
+        self.assertEqual(([b["solarWatt"] for b in s["batteries"]], s["solarWatt"]), ([117, 457], 574))
 
 
 if __name__ == "__main__":
