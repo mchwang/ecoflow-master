@@ -178,6 +178,17 @@ class Commands(Base):
         r(2, 7, 2000, h=11)                            # 2 h later (app was down): that drop isn't counted
         self.assertAlmostEqual(server.day_data(at(9, day=4).date(), at(12), 30720)["report"]["stored_kwh"], 0.1)
 
+    def test_measured_solar_per_hour_for_the_forecast_chart(self):
+        r = lambda h, m, w: server.db.add_reading(at(h, m).timestamp(), 50, w, 0, 0, 0, 0)
+        for m in range(0, 60, 5):
+            r(9, m, 2000)                                      # 9 AM: 2 kW for the whole hour
+        for m in (0, 5, 10):
+            r(10, m, 1000)
+        r(10, 15, 0)                                           # 10 AM: 1 kW for the 15 minutes with readings
+        r(8, 0, 500)                                           # 8 AM: one reading, nothing after it: no data, not 0
+        self.assertEqual(server.today_solar_kw(at(10, 30)), {9: 2.0, 10: 1.0})
+        self.assertNotIn(10, server.today_solar_kw(at(10, 2)))  # 2 minutes in: too early to show
+
     def test_savings_stored_per_day_and_totalled(self):
         for d in (4, 5):                                   # 1 kW house on solar for 5 min, off-peak, two days
             for m in (0, 5):

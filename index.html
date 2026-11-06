@@ -121,8 +121,12 @@
   .fc { display:flex; gap:6px; align-items:flex-end; min-height:130px; padding-top:4px; }
   .fc .col { flex:1 1 0; display:grid; justify-items:center; gap:2px; min-width:48px; font-size:13px; color:var(--mute); }
   .fc .kw { color:var(--fg); font-weight:600; }
-  .fc i { display:block; width:min(70%, 56px); border-radius:6px 6px 2px 2px; min-height:2px; transform-origin:bottom;
+  .fc .bars { position:relative; width:min(70%, 56px); display:flex; align-items:flex-end; }
+  .fc i { display:block; width:100%; border-radius:6px 6px 2px 2px; min-height:2px; transform-origin:bottom;
           background:linear-gradient(180deg, var(--solar), color-mix(in srgb, var(--solar) 55%, #f97316)); }
+  .fc .bars u { position:absolute; bottom:0; left:25%; width:50%; border-radius:4px 4px 1px 1px; min-height:2px;
+                background:var(--ok); box-shadow:0 0 8px color-mix(in srgb, var(--ok) 60%, transparent); }
+  .fc .act { color:var(--ok); font-weight:600; }
   .fc.grow i { animation:grow .7s cubic-bezier(.2,.7,.3,1) both; animation-delay:calc(var(--k) * 45ms); }
   @keyframes grow { from { transform:scaleY(0); } }
   .fc .after { opacity:.4; }
@@ -605,19 +609,22 @@ async function refresh() {
 
     // no array size yet -> chart sunlight (W/m2) so cloudy vs sunny is still visible
     const useKw = e.pv_kw > 0, val = f => useKw ? f.kw : f.ghi, fmt = f => useKw ? f.kw.toFixed(1) : f.ghi;
-    const max = Math.max(0.01, ...d.forecast.map(val)), dl = e.offpeak_end.slice(0, 2);
+    const act = f => useKw && f.actual != null ? f.actual : null;  // measured kW only compares with kW bars
+    const max = Math.max(0.01, ...d.forecast.map(val), ...d.forecast.map(f => act(f) || 0)), dl = e.offpeak_end.slice(0, 2);
     $('fc-cap').textContent = (useKw ? 'Forecast solar output per hour (kW).' : 'Forecast sunlight per hour (W/m²); switches to kW once the array size is known.')
-      + " Faded hours are after the deadline and don't count.";
+      + " Faded hours are after the deadline and don't count." + (useKw ? ' Green inner bar: measured so far.' : '');
     if (!fcDrawn && d.forecast.length) { $('fc').classList.add('grow'); setTimeout(() => $('fc').classList.remove('grow'), 1800); fcDrawn = true; }
     $('fc').innerHTML = d.forecast.length ? d.forecast.map((f, k) => `<div class="col${f.hour >= dl ? ' after' : ''}" data-tip="${
         tipHtml(span(+f.hour), [['Sunlight', `${f.ghi} W/m²`], ['Cloud cover', `${f.cloud}%`],
-          ...(useKw ? [['Expected solar', `${f.kw.toFixed(2)} kWh (avg ${w(f.kw * 1000)})`]] : [['Expected solar', 'array size not learned yet']])],
+          ...(useKw ? [['Expected solar', `${f.kw.toFixed(2)} kWh (avg ${w(f.kw * 1000)})`]] : [['Expected solar', 'array size not learned yet']]),
+          ...(f.actual != null ? [['Measured solar', `avg ${w(f.actual * 1000)}${+f.hour === new Date().getHours() ? ' so far' : ''}`]] : [])],
           f.hour >= dl ? `After the ${end} deadline: not counted` : `Counts toward ${e.min_soc}% by ${end}`)}">
-        <span class="kw">${fmt(f)}</span><i style="height:${Math.round(val(f)/max*72)}px;--k:${k}"></i>
+        <span class="kw">${fmt(f)}${act(f) != null ? ` <span class="act">${act(f).toFixed(1)}</span>` : ''}</span>
+        <div class="bars"><i style="height:${Math.round(val(f)/max*72)}px;--k:${k}"></i>${act(f) != null ? `<u style="height:${Math.round(act(f)/max*72)}px"></u>` : ''}</div>
         <span>${t12(f.hour + ':00')}</span><span class="cloud">${icon(f.cloud >= 50 ? 'cloud' : 'sun', 'ic sm')}${f.cloud}%</span></div>`).join('')
       : '<span class="mute">No forecast yet. Set your location in Settings.</span>';
     $('fc').setAttribute('aria-label', d.forecast.length
-      ? `Forecast ${useKw ? 'solar kW' : 'sunlight W/m²'} by hour: ` + d.forecast.map(f => `${+f.hour}:00 ${fmt(f)}, ${f.cloud}% cloud`).join('; ')
+      ? `Forecast ${useKw ? 'solar kW' : 'sunlight W/m²'} by hour: ` + d.forecast.map(f => `${+f.hour}:00 ${fmt(f)}${act(f) != null ? ` (measured ${act(f).toFixed(1)})` : ''}, ${f.cloud}% cloud`).join('; ')
       : 'No forecast');
   }
 
