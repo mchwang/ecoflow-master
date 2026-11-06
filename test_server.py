@@ -96,7 +96,7 @@ class Commands(Base):
         self.assertTrue(server.cfg["bal_held"])
 
 
-class Http(Base):
+class HttpServer(Base):  # starts the real handler; no tests of its own
     @classmethod
     def setUpClass(cls):
         cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
@@ -115,6 +115,9 @@ class Http(Base):
         except urllib.error.HTTPError as e:
             return e.code, json.load(e)
 
+
+
+class Http(HttpServer):
     def test_rejected_save_changes_nothing(self):
         code, r = self.post("/api/config", {"min_soc": 70, "bal_full_soc": 50})  # resume 75 >= pause 50
         self.assertEqual(code, 400)
@@ -126,6 +129,52 @@ class Http(Base):
         self.assertEqual((code, r), (200, {"ok": True}))
         self.assertEqual(json.loads(server.CONFIG_FILE.read_text())["min_soc"], 65)
         self.assertIn("EcoFlow down", server.state["error"])
+
+
+class SignIn(HttpServer):
+    def setUp(self):
+        super().setUp()
+        server.USER, server.PASSWORD = "mch", "pw"
+        self.addCleanup(setattr, server, "PASSWORD", "")
+
+    def req(self, method, path, body=None, headers=None):
+        import http.client
+        c = http.client.HTTPConnection("127.0.0.1", self.httpd.server_port)
+        c.request(method, path, body=body, headers=headers or {})
+        r = c.getresponse()
+        out = r.status, dict(r.getheaders()), r.read().decode()
+        c.close()
+        return out
+
+    def login(self, pw, headers=None):
+        return self.req("POST", "/login", f"user=mch&password={pw}",
+                        {"Content-Type": "application/x-www-form-urlencoded", **(headers or {})})
+
+    def test_sign_in_page_instead_of_popup(self):
+        code, h, body = self.req("GET", "/")
+        self.assertEqual(code, 200); self.assertIn("Sign in", body); self.assertNotIn("WWW-Authenticate", h)
+        self.assertEqual(self.req("GET", "/api/state")[0], 401)
+
+    def test_wrong_password_no_cookie(self):
+        code, h, _ = self.login("nope")
+        self.assertEqual(code, 401); self.assertNotIn("Set-Cookie", h)
+
+    def test_cookie_keeps_you_signed_in(self):
+        code, h, _ = self.login("pw", {"X-Forwarded-Proto": "https"})
+        self.assertEqual(code, 303)
+        cookie = h["Set-Cookie"]
+        for flag in ("HttpOnly", "SameSite=Lax", "Secure", "Max-Age=31536000"):
+            self.assertIn(flag, cookie)
+        session = cookie.split(";")[0]
+        self.assertEqual(self.req("GET", "/api/state", headers={"Cookie": session})[0], 200)
+        self.assertEqual(self.req("GET", "/api/state", headers={"Cookie": session[:-1] + "0"})[0], 401)  # tampered
+
+    def test_expired_or_old_password_session_rejected(self):
+        old = "hp_session=" + server.make_session(now=time.time() - 400 * 86400)
+        self.assertFalse(server.valid_session(old))
+        current = "hp_session=" + server.make_session()
+        server.PASSWORD = "changed"
+        self.assertFalse(server.valid_session(current))  # changing the password signs everyone out
 
 
 class PanelData(unittest.TestCase):
