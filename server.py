@@ -545,7 +545,10 @@ def tick(now=None):
         forecast = []
         for t, ghi, cc in (w["hourly"] if w else []):
             h = t - timedelta(hours=1)
-            if h.date() == now.date() and (ghi or 0) > 0:
+            # every hour that overlaps daylight: Open-Meteo often gives 0 for the last hour before sunset
+            daylight = w["sunrise"] < f"{h + timedelta(hours=1):%H:%M}" and f"{h:%H:%M}" < w["sunset"]
+            if h.date() == now.date() and ((ghi or 0) > 0 or daylight):
+                ghi = ghi or 0
                 kw = (before if h.hour < now.hour else profile).get(h.hour, fallback_kw)
                 forecast.append({"hour": f"{h:%H}", "cloud": cc, "ghi": round(ghi), "kw": round(ghi / 1000 * kw, 2), "actual": actual.get(h.hour)})
         state.update(status=s, raw=raw, error=weather["error"], updated=now.isoformat(timespec="seconds"), decision={

@@ -189,6 +189,14 @@ class Commands(Base):
         self.assertEqual(server.today_solar_kw(at(10, 30)), {9: 2.0, 10: 1.0})
         self.assertNotIn(10, server.today_solar_kw(at(10, 2)))  # 2 minutes in: too early to show
 
+    def test_forecast_chart_runs_until_sunset(self):
+        server.cfg.update(lat=1.0)
+        wx = {"hourly": [(at(h), 300 if 9 <= h <= 16 else 0, 0) for h in range(1, 24)], "sunrise": "06:38", "sunset": "17:04"}
+        with mock.patch.object(server, "get_weather", return_value=wx):
+            server.tick(at(12))
+        hours = [f["hour"] for f in server.state["decision"]["forecast"]]
+        self.assertEqual(hours, [f"{h:02}" for h in range(6, 18)])  # 6 AM (sunrise 6:38) to 5 PM (sunset 5:04), zero-sun hours too
+
     def test_chart_profile_ignores_todays_readings(self):
         for day, w in ((5, 300), (6, 900)):                    # yesterday 300 W per DPU at 500 W/m2, today 900 W
             for m in range(25):
