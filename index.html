@@ -149,7 +149,7 @@
   td .mini i { display:block; height:100%; background:var(--home); border-radius:3px; transition:width .6s ease-out; }
   .pill { display:inline-flex; align-items:center; gap:5px; font-size:12px; padding:2px 8px; border-radius:999px; background:var(--track); }
   .pill.on { color:var(--ok); background:color-mix(in srgb, var(--ok) 15%, transparent); }
-  ul.log { margin:0; padding:0; list-style:none; display:grid; gap:8px; color:var(--mute); font-size:13px; max-height:560px; overflow:auto; align-content:start; }
+  ul.log { margin:0; padding:0; list-style:none; display:grid; gap:8px; color:var(--mute); font-size:13px; max-height:230px; overflow:auto; align-content:start; }
   ul.log li { display:flex; gap:8px; align-items:flex-start; }
   ul.log li .ic { margin-top:2px; }
   pre { overflow-x:auto; font-size:12px; max-height:420px; margin:12px 0 0; }
@@ -244,7 +244,7 @@
         <h2><svg class="ic sm"><use href="#i-battery"/></svg>Batteries</h2>
         <div class="bats" id="bats"></div>
       </div>
-      <div class="card"><h2><svg class="ic sm"><use href="#i-gauge"/></svg>Panel settings</h2><div class="table"><table id="settings" class="compact"></table></div></div>
+      <div class="card"><h2><svg class="ic sm"><use href="#i-activity"/></svg>Activity</h2><ul class="log" id="log"></ul></div>
     </div>
   </section>
 
@@ -303,10 +303,8 @@
       </form>
   </section>
 
-  <section class="two">
-    <div class="card"><h2><svg class="ic sm"><use href="#i-list"/></svg>Circuits</h2><div class="table"><table id="circuits"></table></div></div>
-    <div class="card"><h2><svg class="ic sm"><use href="#i-activity"/></svg>Activity</h2><ul class="log" id="log"></ul></div>
-  </section>
+  <section class="card"><h2><svg class="ic sm"><use href="#i-list"/></svg>Circuits</h2><div class="table"><table id="circuits"></table></div></section>
+  <details class="card"><summary><svg class="ic sm"><use href="#i-gauge"/></svg>Panel settings</summary><div class="table"><table id="settings" class="compact"></table></div></details>
   <details class="card"><summary><svg class="ic sm"><use href="#i-code"/></svg>All raw panel data</summary><pre id="raw"></pre></details>
 </main>
 <script>
