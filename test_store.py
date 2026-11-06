@@ -36,8 +36,8 @@ class DailySavings(unittest.TestCase):
         d.save_daily_savings({"2026-10-31": [1.5, 6.0]}, 1)                  # no solar split: stored as 0
         d.save_daily_savings({"2026-11-01": [0.2, 1.0, 1.0, 2.0]}, 2)
         d.save_daily_savings({"2026-11-01": [0.5, 2.0, 3.0, 4.0]}, 3)        # same day recomputed: replaced, not added
-        self.assertEqual(d.daily_savings(), [("2026-10-31", 1.5, 6.0, 0.0, 0.0), ("2026-11-01", 0.5, 2.0, 3.0, 4.0)])
-        self.assertEqual(d.daily_savings("2026-11-01"), [("2026-11-01", 0.5, 2.0, 3.0, 4.0)])
+        self.assertEqual(d.daily_savings(), [("2026-10-31", 1.5, 6.0, 0.0, 0.0, 0.0, 0.0), ("2026-11-01", 0.5, 2.0, 3.0, 4.0, 0.0, 0.0)])
+        self.assertEqual(d.daily_savings("2026-11-01"), [("2026-11-01", 0.5, 2.0, 3.0, 4.0, 0.0, 0.0)])
 
 
 class PerDpuAndWeather(unittest.TestCase):

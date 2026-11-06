@@ -134,6 +134,15 @@
   .tip div { display:flex; justify-content:space-between; gap:12px; } .tip div span:first-child { color:var(--mute); }
   .tip p { margin:6px 0 0; color:var(--mute); }
   [data-tip] { cursor:default; } .hr [data-tip]:hover i, .fc [data-tip]:hover i { filter:brightness(1.25); }
+  .dayhead { display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:space-between; margin-bottom:10px; }
+  .dayhead h2 { margin:0; }
+  .daynav { display:flex; gap:6px; align-items:center; } .daynav button { min-width:44px; padding:0 12px; }
+  .daynav input { width:auto; }
+  .subh { font-size:14px; color:var(--mute); text-transform:uppercase; letter-spacing:.06em; margin:18px 0 8px; font-weight:600; }
+  .sankey { display:block; width:100%; min-width:620px; height:280px; }
+  .sankey text { fill:var(--fg); font:600 13px "Plus Jakarta Sans", system-ui, sans-serif; }
+  .sankey text.s { fill:var(--mute); font-weight:500; font-size:12px; }
+  .sankey path { opacity:.38; transition:opacity .2s; } .sankey path:hover { opacity:.7; }
   .hrgrid { display:grid; gap:12px 24px; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); margin-bottom:10px; }
   .hrblock { min-width:0; }
   .hrhead { display:flex; align-items:center; gap:8px; color:var(--mute); font-size:14px; margin-bottom:6px; }
@@ -354,13 +363,21 @@
   </section>
 
   <section class="card" aria-labelledby="td-h">
-    <h2 id="td-h"><svg class="ic sm"><use href="#i-activity"/></svg>Today</h2>
+    <div class="dayhead"><h2 id="td-h"><svg class="ic sm"><use href="#i-activity"/></svg><span id="td-title">Today</span></h2>
+      <div class="daynav"><button id="day-prev" aria-label="Previous day" onclick="stepDay(-1)">‹</button>
+        <input type="date" id="day-pick" aria-label="Day to show" onchange="pickDay(this.value)">
+        <button id="day-next" aria-label="Next day" onclick="stepDay(1)">›</button><button id="day-today" onclick="pickDay(null)">Today</button></div></div>
     <div class="hrgrid">
       <div class="hrblock" style="--c:var(--solar)"><div class="hrhead"><svg class="ic"><use href="#i-sun"/></svg>Solar generated <b class="num" id="td-solar">–</b></div><div class="hr" id="hr0" role="img"></div></div>
       <div class="hrblock" style="--c:var(--home)"><div class="hrhead"><svg class="ic"><use href="#i-home"/></svg>Home used <b class="num" id="td-home">–</b></div><div class="hr" id="hr1" role="img"></div></div>
       <div class="hrblock" style="--c:var(--grid)"><div class="hrhead"><svg class="ic"><use href="#i-plug"/></svg>From grid <b class="num" id="td-grid">–</b></div><div class="hr" id="hr2" role="img"></div></div>
     </div>
-    <p class="caption">kWh per hour today, from the readings taken every minute. Hover or tap a bar for that hour's details; each chart has its own scale.</p>
+    <p class="caption">kWh per hour, from the readings taken every minute. Hover or tap a bar for that hour's details; each chart has its own scale.</p>
+    <h3 class="subh">Energy flow</h3>
+    <div class="fc-wrap"><svg id="sankey" class="sankey" role="img"></svg></div>
+    <p class="caption">Where the day's energy came from (left) and went (right). Grid power is split by PG&amp;E period with what it cost.</p>
+    <h3 class="subh">Savings</h3>
+    <div class="facts" id="sv-day"></div>
   </section>
 
   <section class="card"><h2><svg class="ic sm"><use href="#i-list"/></svg>Circuits</h2><ul class="circuits" id="circuits"></ul></section>
@@ -483,17 +500,7 @@ async function refresh() {
   setText('saved', sv ? money(sv.today) : '–');
   $('saved-sub').textContent = sv ? `${money(sv.total)} this month · ${money(sv.allTime)} all time` : 'No history yet';
 
-  const hrs = sv?.hourlyToday || [], kwh = v => `${v.toFixed(1)} kWh`, tot = i => hrs.reduce((a, h) => a + h[i], 0);
-  ['td-solar', 'td-home', 'td-grid'].forEach((id, i) => setText(id, hrs.length ? kwh(tot(i)) : '–'));
-  ['Solar', 'Home used', 'From grid'].forEach((name, i) => {
-    const max = Math.max(0.01, ...hrs.map(h => h[i]));
-    $('hr' + i).innerHTML = hrs.length ? Array.from({ length: 24 }, (_, k) => {  // whole day, so the three charts line up
-      const v = hrs[k]?.[i];
-      return `<div class="col${v == null ? ' future' : ''}"${v == null ? '' : ` data-tip="${hourTip(k, hrs[k], k === hrs.length - 1)}"`}>
-        <i style="height:${Math.round((v || 0) / max * 64)}px"></i>${k % 6 ? '' : `<span class="t">${t12(k + ':00')}</span>`}</div>`;
-    }).join('') : '<span class="mute">No readings yet today.</span>';
-    $('hr' + i).setAttribute('aria-label', `${name} kWh per hour today: ` + hrs.map((h, k) => `${t12(k + ':00')} ${h[i].toFixed(2)}`).join('; '));
-  });
+  if (!dayPick) loadDay(null);  // following today: refresh it with every poll
 
   if (d) {
     const e = d.effective, cls = { 'peak':'bad', 'part-peak':'warn', 'off-peak':'ok' }[d.period];
@@ -622,6 +629,84 @@ function askForce(v) {
 function toggleSettings() { const open = $('cfg').hidden; $('cfg').hidden = !open; $('cfg-btn').setAttribute('aria-expanded', open); $('cfg-t').textContent = open ? 'Hide settings' : 'Settings'; }
 async function takeControl() { const r = await post('/api/take-control', {}); if (r.error) showError(r.error); }
 function cancelForce() { $('force-confirm').hidden = true; $('force-btns').hidden = false; }
+
+// ---- Day card: any stored day (null = today, refreshed with each poll) ----
+let dayPick = null, dayData = null;
+async function loadDay(date) {
+  const r = await fetch('/api/day' + (date ? '?date=' + date : '')).then(r => r.json());
+  if (r.error) return showError(r.error);
+  if ((date || null) !== dayPick) return;  // a newer pick happened while this loaded
+  dayData = r; renderDay(r);
+}
+function pickDay(date) { dayPick = date && date !== dayData?.today ? date : null; loadDay(dayPick); }
+function stepDay(n) {
+  const d = new Date((dayData?.date || new Date().toISOString().slice(0, 10)) + 'T12:00:00');
+  d.setDate(d.getDate() + n); pickDay(d.toISOString().slice(0, 10));
+}
+function renderDay(r) {
+  const isToday = r.date === r.today, rep = r.report, hrs = r.hourly, kwh = v => `${v.toFixed(1)} kWh`;
+  $('td-title').textContent = isToday ? 'Today' : new Date(r.date + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+  $('day-pick').value = r.date; $('day-pick').max = r.today; if (r.first) $('day-pick').min = r.first;
+  $('day-next').disabled = isToday; $('day-today').disabled = isToday; $('day-prev').disabled = !!r.first && r.date <= r.first;
+  const tot = i => hrs.reduce((a, h) => a + h[i], 0);
+  ['td-solar', 'td-home', 'td-grid'].forEach((id, i) => setText(id, r.readings ? kwh(tot(i)) : '–'));
+  ['Solar', 'Home used', 'From grid'].forEach((name, i) => {
+    const max = Math.max(0.01, ...hrs.map(h => h[i]));
+    $('hr' + i).innerHTML = r.readings ? Array.from({ length: 24 }, (_, k) => {  // whole day, so the three charts line up
+      const v = hrs[k]?.[i];
+      return `<div class="col${v == null ? ' future' : ''}"${v == null ? '' : ` data-tip="${hourTip(k, hrs[k], isToday && k === hrs.length - 1)}"`}>
+        <i style="height:${Math.round((v || 0) / max * 64)}px"></i>${k % 6 ? '' : `<span class="t">${t12(k + ':00')}</span>`}</div>`;
+    }).join('') : `<span class="mute">No readings ${isToday ? 'yet today' : 'for this day'}.</span>`;
+    $('hr' + i).setAttribute('aria-label', `${name} kWh per hour: ` + hrs.map((h, k) => `${t12(k + ':00')} ${h[i].toFixed(2)}`).join('; '));
+  });
+  drawSankey(rep, r.readings);
+  const sv = last?.savings, m = v => (v < 0 ? '−$' : '$') + Math.abs(v).toFixed(2);
+  $('sv-day').innerHTML = [
+    [`Cost without the system`, m(rep.cost_without), 'house all from grid at PG&E prices'],
+    ['Actual grid cost', m(rep.grid_cost), 'what the grid really billed'],
+    [isToday ? 'Saved today' : 'Saved that day', m(rep.saved), `${kwh(rep.home_kwh)} used at home`],
+    ['This month', sv ? m(sv.total) : '–', sv ? `${m(sv.monthWithout)} → ${m(sv.monthGrid)}` : ''],
+    ['All time', sv ? m(sv.allTime) : '–', sv ? `${sv.days} day${sv.days === 1 ? '' : 's'} since ${sv.since}` : ''],
+    ['Est. per year', sv?.annual != null ? m(sv.annual) : '–', sv?.annual != null ? 'from the daily average so far' : 'after a week of history'],
+  ].map(([k, v, sub]) => `<div class="fact"><div><span class="label">${k}</span><b class="num">${v}</b><span class="mute" style="font-size:13px">${sub}</span></div></div>`).join('');
+}
+function drawSankey(rep, n) {
+  const svg = $('sankey'), W = Math.max(620, svg.clientWidth || 620), H = 280, gap = 10, LX = 170, RX = W - 170, MX = W / 2, BW = 12;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  if (!n) { svg.innerHTML = `<text class="s" x="${W / 2}" y="${H / 2}" text-anchor="middle">No readings for this day</text>`; return; }
+  const P = [['off-peak', 'Grid · off-peak', 'var(--grid)'], ['part-peak', 'Grid · part-peak', 'var(--warn)'], ['peak', 'Grid · peak', 'var(--low)']];
+  const left = P.filter(([p]) => rep.grid_kwh[p] > 0.005).map(([p, label, c]) => ({ id: p, label, c, v: rep.grid_kwh[p], sub: `$${rep.grid_usd[p].toFixed(2)}` }))
+    .concat([{ id: 'solar', label: 'Solar', c: 'var(--solar)', v: rep.solar_kwh, sub: 'free' }])
+    .concat(rep.drawn_kwh > 0.005 ? [{ id: 'start', label: 'Battery (earlier)', c: 'var(--batt)', v: rep.drawn_kwh, sub: 'stored before' }] : []);
+  const battIn = rep.solar_batt + Object.values(rep.grid_batt).reduce((a, b) => a + b, 0) + rep.drawn_kwh;
+  const mid = [{ id: 'batt', label: 'Battery', c: 'var(--batt)', v: battIn, sub: `${battIn.toFixed(1)} in · ${rep.batt_home.toFixed(1)} out` }];
+  const right = [{ id: 'home', label: 'Home', c: 'var(--home)', v: rep.home_kwh, sub: rep.home_kwh ? `${Math.round(rep.batt_home / rep.home_kwh * 100)}% from battery` : '' },
+    { id: 'kept', label: 'Still in battery', c: 'var(--batt)', v: rep.stored_kwh, sub: 'charge gained' },
+    { id: 'loss', label: 'Losses', c: 'var(--mute)', v: rep.losses_kwh, sub: battIn ? `${Math.round(rep.losses_kwh / battIn * 100)}% of charge` : '' }];
+  const links = P.flatMap(([p]) => [[p, 'home', rep.grid_home[p]], [p, 'batt', rep.grid_batt[p]]])
+    .concat([['solar', 'home', rep.solar_home], ['solar', 'batt', rep.solar_batt], ['start', 'batt', rep.drawn_kwh],
+             ['batt', 'home', rep.batt_home], ['batt', 'kept', rep.stored_kwh], ['batt', 'loss', rep.losses_kwh]]).filter(l => l[2] > 0.005);
+  const sum = col => col.reduce((a, x) => a + x.v, 0);
+  const k = Math.min(...[left, right].map(col => (H - 50 - gap * (col.length - 1)) / Math.max(0.01, sum(col))), (H - 90) / Math.max(0.01, battIn));  // room for labels
+  const place = (col, x) => { let y = (H - (sum(col) * k + gap * (col.length - 1))) / 2; for (const nd of col) { nd.x = x; nd.y = y; nd.h = Math.max(2, nd.v * k); nd.o = nd.i = 0; y += nd.h + gap; } };
+  place(left, LX - BW); place(right, RX); place(mid, MX - BW / 2);
+  const N = Object.fromEntries([...left, ...mid, ...right].map(nd => [nd.id, nd]));
+  const tip = (t, v, extra) => esc(`<b>${t}</b><div><span>Energy</span><span>${v.toFixed(2)} kWh</span></div>` + (extra || ''));
+  let out = links.map(([a, b, v]) => {
+    const s = N[a], t = N[b], h = v * k, y0 = s.y + s.o, y1 = t.y + t.i; s.o += h; t.i += h;
+    const x0 = s.x + BW, x1 = t.x, xm = (x0 + x1) / 2;
+    return `<path d="M${x0},${y0} C${xm},${y0} ${xm},${y1} ${x1},${y1} L${x1},${y1 + h} C${xm},${y1 + h} ${xm},${y0 + h} ${x0},${y0 + h} Z" fill="${s.c}" data-tip="${tip(`${s.label} → ${t.label}`, v)}"></path>`;
+  }).join('');
+  out += [...left, ...mid, ...right].map(nd => {
+    const lx = nd.id === 'batt' ? nd.x + BW / 2 : left.includes(nd) ? nd.x - 8 : nd.x + BW + 8, anchor = nd.id === 'batt' ? 'middle' : left.includes(nd) ? 'end' : 'start';
+    const ly = nd.id === 'batt' ? nd.y - 24 : nd.y + nd.h / 2 - 2;
+    return `<rect x="${nd.x}" y="${nd.y}" width="${BW}" height="${nd.h}" rx="3" fill="${nd.c}" data-tip="${tip(nd.label, nd.v, nd.sub ? `<p>${nd.sub}</p>` : '')}"></rect>
+      <text x="${lx}" y="${ly}" text-anchor="${anchor}">${nd.label} ${nd.v.toFixed(1)}</text><text class="s" x="${lx}" y="${ly + 15}" text-anchor="${anchor}">${nd.sub}</text>`;
+  }).join('');
+  svg.innerHTML = out;
+  svg.setAttribute('aria-label', 'Energy flow, kWh: ' + links.map(([a, b, v]) => `${N[a].label} to ${N[b].label} ${v.toFixed(1)}`).join('; '));
+}
+addEventListener('resize', () => dayData && drawSankey(dayData.report, dayData.readings));
 
 const tick = () => refresh().catch(() => showError('Dashboard server unreachable. Is server.py running?'));
 tick(); setInterval(tick, 10000);

@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from ecoflow_api import sign
-from planner import ROUND_TRIP, afternoon_sun, balance, daily_solar_kwh, decide, fit_hourly_kw, hourly_kwh, room_target, simulate, solar_wh_hourly, target_soc, fit_array_kw, hm12, savings, solar_wh, tou_period
+from planner import afternoon_sun, balance, daily_solar_kwh, day_report, decide, fit_hourly_kw, hourly_kwh, room_target, simulate, solar_wh_hourly, target_soc, fit_array_kw, hm12, solar_wh, tou_period
 
 TZ = ZoneInfo("America/Los_Angeles")
 CFG = {"capacity_wh": 30720, "charge_w": 4000, "min_soc": 60, "max_soc": 95,
@@ -115,40 +115,37 @@ class Balance(unittest.TestCase):
         self.assertTrue(self.b(95, sun=None))                     # no forecast: rule still works on levels
 
 
-class Savings(unittest.TestCase):
+class DayReport(unittest.TestCase):
     OFF, PEAK = 0.22558, 0.41099  # EV2-A winter $/kWh (test day is in November)
+    CAP = 10000                   # 10 kWh battery: 1% = 0.1 kWh
 
     def test_grid_charged_off_peak_used_at_peak(self):
-        rows = [(at(2), 500, 1750, 0),    # 2-3 AM: 1.25 kWh from grid into the battery -> 1.0 kWh usable
-                (at(3), 500, 500, 0),
-                (at(17), 1000, 0, 0),     # 5-6 PM peak: battery runs the 1 kW house
-                (at(18), 1000, 1000, 0)]
-        r = savings(rows, at(0), max_gap_s=3600)
-        self.assertAlmostEqual(r["today"], 1.0 * self.PEAK - 1.25 * self.OFF)  # 80% round trip on the grid energy
-        self.assertAlmostEqual(r["today_kwh"], 1.0)
+        rows = [(at(2), 50, 500, 1750, 0),    # 2-3 AM: house 0.5 kW from grid + 1.25 kWh into the battery
+                (at(3), 62, 500, 500, 0),
+                (at(17), 60, 1000, 0, 0),     # 5-6 PM peak: battery runs the 1 kW house
+                (at(18), 50, 1000, 1000, 0)]
+        r = day_report(rows, self.CAP, max_gap_s=50000)
+        self.assertAlmostEqual(r["grid_home"]["off-peak"], 0.5); self.assertAlmostEqual(r["grid_batt"]["off-peak"], 1.25)
+        self.assertAlmostEqual(r["batt_home"], 1.0); self.assertAlmostEqual(r["home_kwh"], 1.5)
+        self.assertAlmostEqual(r["stored_kwh"], 0); self.assertAlmostEqual(r["losses_kwh"], 0.25)   # 20% of 1.25 lost
+        self.assertAlmostEqual(r["cost_without"], 0.5 * self.OFF + 1.0 * self.PEAK)
+        self.assertAlmostEqual(r["grid_cost"], 1.75 * self.OFF)
+        self.assertAlmostEqual(r["saved"], 1.0 * self.PEAK - 1.25 * self.OFF)   # same as the old cost-pool model
 
-    def test_solar_is_free(self):
-        rows = [(at(13), 1000, 0, 1000), (at(14), 1000, 0, 1000)]  # solar runs the house directly
-        self.assertAlmostEqual(savings(rows, at(0), max_gap_s=3600)["today"], 1.0 * self.OFF)
+    def test_solar_is_free_and_gaps_skipped(self):
+        rows = [(at(13), 50, 1000, 0, 1000), (at(14), 50, 700, 700, 0),   # 1-2 PM solar runs the house
+                (at(14, 1), 50, 700, 700, 0), (at(18), 50, 0, 0, 0)]       # then a 4 h gap (app down): not counted
+        r = day_report(rows, self.CAP, max_gap_s=3600)
+        self.assertAlmostEqual(r["solar_home"], 1.0); self.assertAlmostEqual(r["saved"], 1.0 * self.OFF)
+        self.assertAlmostEqual(r["home_kwh"], 1.0 + 0.7 / 60)
 
-    def test_solar_stored_then_used_is_free_minus_losses(self):
-        rows = [(at(12), 0, 0, 1250), (at(13), 0, 0, 0),  # 1.25 kWh solar into battery -> 1.0 usable, cost 0
-                (at(18), 1000, 0, 0), (at(19), 0, 0, 0)]
-        r = savings(rows, at(0), max_gap_s=3600)
-        self.assertAlmostEqual(r["today"], 1.0 * self.PEAK)
-        self.assertEqual(ROUND_TRIP, 0.8)
+    def test_sources_balance_sinks(self):
+        rows = [(at(9), 20, 800, 300, 900), (at(10), 25, 1200, 0, 400), (at(11), 22, 600, 3500, 100), (at(12), 40, 0, 0, 0)]
+        r = day_report(rows, self.CAP, max_gap_s=3600)
+        into = r["solar_kwh"] + sum(r["grid_kwh"].values()) + r["drawn_kwh"]
+        self.assertAlmostEqual(into, r["home_kwh"] + r["stored_kwh"] + r["losses_kwh"])
+        self.assertAlmostEqual(r["stored_kwh"], 2.0)   # 20% -> 40% of 10 kWh
 
-    def test_grid_only_saves_nothing_and_gaps_skipped(self):
-        rows = [(at(9), 700, 700, 0), (at(9, 1), 700, 700, 0), (at(12), 1000, 0, 0)]  # 3 h gap: app down
-        self.assertEqual(savings(rows, at(0))["today"], 0)
-
-    def test_today_vs_total(self):
-        rows = [(at(13) - timedelta(days=1), 1000, 0, 1000), (at(14) - timedelta(days=1), 0, 0, 0),
-                (at(13), 1000, 0, 1000), (at(14), 0, 0, 0)]
-        r = savings(rows, at(0), max_gap_s=3600)
-        self.assertAlmostEqual(r["today"], self.OFF); self.assertAlmostEqual(r["total"], 2 * self.OFF)
-        self.assertEqual(sorted(r["by_day"]), ["2026-11-05", "2026-11-06"])
-        self.assertAlmostEqual(r["by_day"]["2026-11-05"][0], self.OFF); self.assertAlmostEqual(r["by_day"]["2026-11-06"][1], 1.0)
 
 
 class Simulate(unittest.TestCase):

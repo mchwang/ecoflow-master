@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 
 from db import DB
 from ecoflow_api import SSL_CTX, EcoFlow
-from planner import ROUND_TRIP, afternoon_sun, balance, daily_solar_kwh, deadline_of, decide, hourly_kwh, room_target, simulate, target_soc, hm12, price_at, savings, fit_array_kw, fit_hourly_kw, solar_wh, solar_wh_hourly, tou_period
+from planner import afternoon_sun, balance, daily_solar_kwh, day_report, deadline_of, decide, hourly_kwh, room_target, simulate, target_soc, hm12, fit_array_kw, fit_hourly_kw, solar_wh, solar_wh_hourly, tou_period
 
 HERE = Path(__file__).parent
 TZ = ZoneInfo("America/Los_Angeles")
@@ -130,30 +130,48 @@ def update_control(s, force=False):
     return leader
 
 
-def month_savings(now, capacity_wh):
-    """Savings today and this month, replayed from this month's readings (~45k rows max, fast enough per poll)."""
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    rows = db.readings_since(month_start.timestamp())
-    if not rows:
+def _rounded(x):
+    return round(x, 3) if isinstance(x, float) else {k: _rounded(v) for k, v in x.items()} if isinstance(x, dict) else x
+
+
+def day_data(day, now, cap_wh):
+    """One local day: energy flow and money (planner.day_report), kWh per hour, solar per DPU."""
+    start = datetime.combine(day, datetime.min.time(), TZ)
+    rows = [(datetime.fromtimestamp(ts, TZ), *rest)
+            for ts, *rest in db.readings_since(start.timestamp(), (start + timedelta(days=1)).timestamp())]
+    hours = hourly_kwh([(t, solar, load, grid) for t, _, load, grid, solar, *_ in rows])
+    solar = daily_solar_kwh([(t, s1, s2) for t, *_, s1, s2 in rows]).get(day.isoformat(), [0.0, 0.0])
+    upto = now.hour + 1 if day == now.date() else 24
+    return {"date": day.isoformat(), "readings": len(rows), "hourly": [[round(x, 3) for x in h] for h in hours[:upto]],
+            "solarDpu": [round(x, 2) for x in solar], "report": _rounded(day_report([r[:5] for r in rows], cap_wh))}
+
+
+def refresh_savings(now, cap_wh):
+    """Store today's totals (and any day this month not yet stored the new way) in daily_savings,
+    then summarize today, this month and all time for the page."""
+    today, month = now.date(), now.date().replace(day=1).isoformat()
+    stored = {r[0]: r for r in db.daily_savings(month)}
+    by_day = {}
+    for d in range(1, today.day + 1):
+        day = today.replace(day=d)
+        if day != today and day.isoformat() in stored and stored[day.isoformat()][5] is not None:
+            continue  # past day already stored with cost columns
+        x = day_data(day, now, cap_wh)
+        if x["readings"]:
+            r = x["report"]
+            by_day[day.isoformat()] = [r["saved"], r["home_kwh"], *x["solarDpu"], r["cost_without"], r["grid_cost"]]
+    db.save_daily_savings(by_day, now.timestamp())
+    hist = db.daily_savings()
+    if not hist:
         return None
-    first_soc = rows[0][1] or 0
-    r = savings([(datetime.fromtimestamp(ts, TZ), load, grid, solar) for ts, _, load, grid, solar, _, _ in rows],
-                now.replace(hour=0, minute=0, second=0, microsecond=0),
-                initial_kwh=first_soc / 100 * capacity_wh / 1000,
-                initial_cost_per_kwh=price_at(month_start.replace(hour=1)) / ROUND_TRIP)  # unknown origin: assume off-peak grid
-    solar = daily_solar_kwh([(datetime.fromtimestamp(ts, TZ), s1, s2) for ts, *_, s1, s2 in rows])
-    by_day = {d: v + solar.get(d, [0.0, 0.0]) for d, v in r.pop("by_day").items()}
-    for d, v in solar.items():
-        by_day.setdefault(d, [0.0, 0.0] + v)
-    db.save_daily_savings(by_day, now.timestamp())  # this month's days; earlier months stay as stored
-    history = db.daily_savings()
-    today = now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    hours = hourly_kwh([(datetime.fromtimestamp(ts, TZ), solar, load, grid)
-                        for ts, _, load, grid, solar, _, _ in rows if ts >= today])
-    return {k: round(v, 2) for k, v in r.items()} | {
-        "hourlyToday": [[round(x, 3) for x in h] for h in hours[:now.hour + 1]],  # [solar, home, grid] kWh per hour so far
-        "solarToday": [round(x, 2) for x in solar.get(now.date().isoformat(), [0.0, 0.0])],
-        "allTime": round(sum(d[1] for d in history), 2), "days": len(history), "since": history[0][0] if history else None}
+    t = next((h for h in hist if h[0] == today.isoformat()), None)
+    m = [h for h in hist if h[0] >= month]
+    add = lambda rows, i: round(sum(h[i] or 0 for h in rows), 2)
+    return {"today": add([t] if t else [], 1), "todayWithout": add([t] if t else [], 5), "todayGrid": add([t] if t else [], 6),
+            "total": add(m, 1), "monthWithout": add(m, 5), "monthGrid": add(m, 6),
+            "allTime": add(hist, 1), "days": len(hist), "since": hist[0][0],
+            "annual": round(add(hist, 1) / len(hist) * 365) if len(hist) >= 7 else None,  # needs a week of history
+            "solarToday": [round(t[3] or 0, 2), round(t[4] or 0, 2)] if t else [0.0, 0.0]}
 
 
 def dpu_profiles(now, max_soc):
@@ -435,7 +453,8 @@ def tick(now=None):
             state["lastWould"] = None
         bal = run_balance(s, c, now, hourly, leader, p1)
         period, season, price = tou_period(now)
-        saved = month_savings(now, c["capacity_wh"])
+        saved = refresh_savings(now, c["capacity_wh"])
+        state["cap_wh"] = c["capacity_wh"]
         # Open-Meteo values are the mean of the hour ending at t, so label each bar with the hour it covers.
         forecast = [{"hour": f"{t - timedelta(hours=1):%H}", "cloud": cc, "ghi": round(ghi or 0), "kw": round((ghi or 0) / 1000 * profile.get((t - timedelta(hours=1)).hour, fallback_kw), 2)}
                     for t, ghi, cc in (w["hourly"] if w else []) if (t - timedelta(hours=1)).date() == now.date() and (ghi or 0) > 0]
@@ -544,9 +563,21 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             self.wfile.write(body)
-        elif self.path == "/api/savings":  # daily history: [{day, saved, kwh}]
+        elif self.path == "/api/savings":  # daily history
             self._json([{"day": d, "saved": round(v, 2), "kwh": round(k, 2), "solar1_kwh": round(s1 or 0, 2),
-                         "solar2_kwh": round(s2 or 0, 2)} for d, v, k, s1, s2 in db.daily_savings()])
+                         "solar2_kwh": round(s2 or 0, 2), "cost_without": cw, "grid_cost": gc}
+                        for d, v, k, s1, s2, cw, gc in db.daily_savings()])
+        elif self.path.startswith("/api/day"):  # /api/day?date=YYYY-MM-DD (default today)
+            now = datetime.now(TZ)
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            try:
+                day = datetime.strptime(q.get("date", [now.date().isoformat()])[0], "%Y-%m-%d").date()
+            except ValueError:
+                return self._json({"error": "date must be YYYY-MM-DD"}, 400)
+            first = db.first_reading_ts()
+            cap = state.get("cap_wh") or DPU_WH * 5
+            self._json({**day_data(day, now, cap), "today": now.date().isoformat(),
+                        "first": first and datetime.fromtimestamp(first, TZ).date().isoformat()})
         elif self.path == "/api/state":
             self._json({**state, "config": cfg, "demo": DEMO})
         else:

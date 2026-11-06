@@ -31,7 +31,7 @@ Settings are saved to `config.json`. The EV2-A prices in `planner.py` are the 20
   - `events`: the activity log
   - `readings` also stores each DPU's solar watts and battery % (`solar1_w`, `solar2_w`, `soc1`, `soc2`). The two arrays face different ways, so each DPU's solar is learned **per hour of day**. Once both DPUs have 20+ sunny minutes in an hour (over 14 days), that hour's profile replaces the combined estimate in the 3 PM forecast, and balancing uses DPU 1's own expected solar.
   - `weather_hourly`: Open-Meteo per hour (total/direct/diffuse sunlight, cloud %, temperature). Past hours are refreshed with Open-Meteo's after-the-fact estimate, and the learning matches readings to these.
-  - `daily_savings`: one row per day with dollars saved and kWh the system delivered to the house. This month is recalculated every minute from `readings`; earlier months stay as stored. `GET /api/savings` returns the history.
+  - `daily_savings`: one row per day: what the house would have cost all from the grid (`cost_without`), what the grid actually cost (`grid_cost`), the difference (`saved`), home kWh, and solar kWh per DPU. Both costs use the PG&E price at each minute, so solar, the battery and its charging losses all show up in the difference. Today is recalculated every minute from `readings`; past days are stored once. `GET /api/savings` returns the history; `GET /api/day?date=YYYY-MM-DD` returns one day's hourly kWh, energy flow (grid by PG&E period with cost, solar, battery, home, losses) and savings.
 - `config.json`: dashboard settings and automation state.
 
 The solar learning reads the last 14 days of `readings`. Growth is about 0.5M rows (~30 MB) a year.

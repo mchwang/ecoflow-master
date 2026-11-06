@@ -146,6 +146,24 @@ class HttpServer(Base):  # starts the real handler; no tests of its own
 
 
 class Http(HttpServer):
+    def get(self, path):
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{self.httpd.server_port}{path}") as r:
+                return r.status, json.load(r)
+        except urllib.error.HTTPError as e:
+            return e.code, json.load(e)
+
+    def test_day_report_for_a_chosen_date(self):
+        for m in (0, 1, 2):  # 9:00-9:02 AM: 1 kW house, 600 W solar, 400 W grid
+            server.db.add_reading(at(9, m, day=5).timestamp(), 50, 600, 1000, 400, 300, 0)
+        code, r = self.get("/api/day?date=2026-11-05")
+        self.assertEqual((code, r["date"], r["readings"], r["first"]), (200, "2026-11-05", 3, "2026-11-05"))
+        self.assertAlmostEqual(r["report"]["solar_home"], 1.2 / 60, places=3)    # 2 min x 600 W
+        self.assertAlmostEqual(r["report"]["grid_kwh"]["off-peak"], 0.8 / 60, places=3)
+        self.assertEqual(len(r["hourly"]), 24)                                     # a past day shows all hours
+        self.assertEqual(self.get("/api/day?date=2026-13-40")[0], 400)
+        self.assertEqual(self.get("/api/day?date=2026-11-04")[1]["readings"], 0)
+
     def test_rejected_save_changes_nothing(self):
         code, r = self.post("/api/config", {"min_soc": 70, "bal_full_soc": 50})  # resume 75 >= pause 50
         self.assertEqual(code, 400)
