@@ -197,6 +197,23 @@ class Commands(Base):
         self.assertAlmostEqual(server.dpu_profiles(at(12), 95, midnight)[0][10], 0.6)   # yesterday only: 300/500
         self.assertAlmostEqual(server.dpu_profiles(at(12), 95)[0][10], 1.2)             # planner: both days
 
+    def test_panel_read_again_soon_after_a_command(self):
+        class Stop(BaseException):
+            pass
+        calls = []
+
+        def fake_tick():
+            calls.append(time.monotonic())
+            if len(calls) == 1:
+                server.set_force_charge(server.fetch()[0], True)   # a command in the first poll...
+            else:
+                raise Stop
+
+        with mock.patch.object(server, "tick", fake_tick), mock.patch.object(server, "REREAD_S", 0.05):
+            with self.assertRaises(Stop):
+                server.loop()
+        self.assertLess(calls[1] - calls[0], 5)                    # ...reads again in seconds, not POLL_S (60)
+
     def test_savings_stored_per_day_and_totalled(self):
         for d in (4, 5):                                   # 1 kW house on solar for 5 min, off-peak, two days
             for m in (0, 5):

@@ -206,6 +206,15 @@ class Simulate(unittest.TestCase):
         self.assertEqual(d["projected_soc"], 20); self.assertEqual(d["kind"], "planned")
 
 
+    def test_charging_says_when_it_will_be_done(self):
+        # 52% projected, stops at 62%: 10% of 30.72 kWh = 3072 Wh at 3600 W -> 51.2 min
+        d = decide(at(14), 40, CFG, charging_by_us=True, projected=52)
+        self.assertEqual(d["kind"], "charging")
+        self.assertEqual(d["done_at"], at(14) + timedelta(minutes=51.2))
+        self.assertIn("done ~2:51 PM", d["reason"])
+        late = decide(at(14, 30), 10, CFG, charging_by_us=True, projected=12)   # can't finish before 3 PM
+        self.assertEqual(late["done_at"], at(15))
+
 class HoldBattery(unittest.TestCase):
     def test_rules(self):
         h = lambda period="off-peak", grid=True, waste=0.0, held=False: hold_battery(period, grid, waste, held)[0]

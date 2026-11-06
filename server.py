@@ -32,6 +32,7 @@ TZ = ZoneInfo("America/Los_Angeles")
 HISTORY_DAYS = 14
 MIN_SAMPLES = 60  # ~1 hour of daylight polls before trusting the learned array size
 POLL_S = 60
+REREAD_S = 15  # after a command, read the panel again this soon so the dashboard shows the change
 DPU_WH = 6144  # one DPU battery pack; fallback only if the panel omits backupFullCap
 
 for line in (HERE / ".env").read_text().splitlines() if (HERE / ".env").exists() else []:
@@ -93,6 +94,7 @@ NUMERIC = {"outage_reserve_soc", "bal_dpu1_left_wh", "bal_full_soc", "bal_releas
 _saved = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
 cfg = {k: _saved.get(k, v) for k, v in DEFAULTS.items()}  # drops settings from older versions
 lock = threading.Lock()
+wake = threading.Event()  # set to start the next poll early
 state = {"status": None, "decision": None, "error": None, "updated": None,
          "log": deque((f"{stamp(datetime.fromtimestamp(t, TZ))} {m}" for t, m in db.recent_events()), maxlen=50)}
 weather = {"at": 0, "key": None, "data": None, "error": None}
@@ -300,6 +302,12 @@ def effective(s):
     return c
 
 
+def reread_soon():
+    t = threading.Timer(REREAD_S, wake.set)
+    t.daemon = True
+    t.start()
+
+
 def set_force_charge(s, on):
     params = {f"ch{b['n']}ForceCharge": "FORCE_CHARGE_ON" if on else "FORCE_CHARGE_OFF" for b in s["batteries"]
               if b["enabled"] != 0 or (b["n"] == 2 and cfg["bal_held"])}  # include DPU 2 if only we paused it
@@ -308,6 +316,7 @@ def set_force_charge(s, on):
             b["forceCharge"] = params[f"ch{b['n']}ForceCharge"]
     else:
         api.set_shp2(SN, params)
+    reread_soon()
     log(f"Sent force charge {'ON' if on else 'OFF'}: {params}")
 
 
@@ -317,6 +326,7 @@ def set_reserve(s, pct):
         demo["backupReserveSoc"] = params["backupReserveSoc"]
     else:
         api.set_shp2(SN, params)
+    reread_soon()
 
 
 def run_reserve(s, hold, why, leader):
@@ -353,6 +363,7 @@ def set_dpu2(enabled):
                 b["enabled"] = params["ch2EnableSet"]
     else:
         api.set_shp2(SN, params)
+    reread_soon()
     log(f"Sent DPU 2 {'resume' if enabled else 'pause'}: {params}")
 
 
@@ -539,6 +550,7 @@ def tick(now=None):
                 forecast.append({"hour": f"{h:%H}", "cloud": cc, "ghi": round(ghi), "kw": round(ghi / 1000 * kw, 2), "actual": actual.get(h.hour)})
         state.update(status=s, raw=raw, error=weather["error"], updated=now.isoformat(timespec="seconds"), decision={
             "charge": charge, "kind": d["kind"], "reason": reason, "startAt": start_at and start_at.strftime("%H:%M"),
+            "doneAt": d.get("done_at") and d["done_at"].strftime("%H:%M"),
             "projectedSoc": d["projected_soc"], "solarKwh": round(pv_wh / 1000, 1),
             "homeKwh": round(sim["home_wh"] / 1000, 1), "wastedKwh": round(sim["wasted_wh"] / 1000, 1),
             "sunrise": w and w["sunrise"], "sunset": w and w["sunset"], "forecast": forecast,
@@ -550,12 +562,13 @@ def tick(now=None):
 
 def loop():
     while True:
+        wake.clear()
         try:
             tick()
         except Exception as e:  # keep polling; show the error on the dashboard
             state["error"] = f"{type(e).__name__}: {e}"
             traceback.print_exc()
-        time.sleep(POLL_S)
+        wake.wait(POLL_S)
 
 
 SESSION_DAYS = 365  # iPhone home-screen apps don't keep basic-auth logins, so the page signs in with a cookie
