@@ -212,8 +212,10 @@ def day_report(rows, cap_wh, max_gap_s=300):
     rows: [(datetime, soc %, load_w, grid_w, solar_w[, battery_wh])] in time order; each reading holds until the next,
     gaps over max_gap_s (app down) are skipped. Each minute the house takes solar first, then grid, then
     battery; whatever solar and grid is left over goes into the battery. Grid kWh and $ are split by PG&E
-    period. Saved = what the house would have cost all from the grid minus what the grid actually cost
-    (solar, battery and its charging losses all land in that difference).
+    period. Saved = what the house would have cost all from the grid minus what the grid actually cost, plus the
+    battery's change over the day at the off-peak price (what refilling it from the grid would cost). Without that,
+    a grid charge counts as a cost the day it's bought and solar stored in the battery counts for nothing until it's
+    used; across days the credits cancel (stored today = drawn tomorrow), so totals don't drift.
     The battery's change is added up over the same counted intervals, from the panel's Wh reading when both ends
     have it (the whole-% level moves in ~1% steps), so app downtime adds nothing to either side. Energy balance:
     energy in (grid + solar + drawn from earlier charge) =
@@ -222,6 +224,7 @@ def day_report(rows, cap_wh, max_gap_s=300):
     periods = ("off-peak", "part-peak", "peak")
     grid_home, grid_batt, grid_usd = (dict.fromkeys(periods, 0.0) for _ in range(3))
     solar_home = solar_batt = batt_home = home = without = delta = 0.0
+    off_price = 0.0
     for (t, soc, load, grid, solar, *wh), (t_next, soc_next, *rest) in zip(rows, rows[1:]):
         dt_s = (t_next - t).total_seconds()
         if not 0 < dt_s <= max_gap_s or load is None or grid is None:
@@ -233,7 +236,8 @@ def day_report(rows, cap_wh, max_gap_s=300):
             delta += (soc_next - soc) / 100 * cap_wh / 1000
         k = dt_s / 3.6e6                                   # W -> kWh over this reading
         load, imp, solar = max(0.0, load), max(0.0, grid), max(0.0, solar or 0)
-        period, _, price = tou_period(t)
+        period, season, price = tou_period(t)
+        off_price = EV2A[season]["off-peak"]
         sh = min(solar, load); gh = min(imp, load - sh)
         solar_home += sh * k; solar_batt += (solar - sh) * k
         grid_home[period] += gh * k; grid_batt[period] += (imp - gh) * k; grid_usd[period] += imp * k * price
@@ -251,7 +255,8 @@ def day_report(rows, cap_wh, max_gap_s=300):
             # share of everything that passed through the battery (charged today or drawn from earlier) not lost
             "batt_eff": min(100.0, (1 - balance / (into + max(0.0, -delta))) * 100)
                         if into + max(0.0, -delta) > 0.05 and balance >= -0.05 else None,  # unknown if meters disagree
-            "cost_without": without, "grid_cost": grid_cost, "saved": without - grid_cost}
+            "cost_without": without, "grid_cost": grid_cost, "battery_value": delta * off_price,
+            "saved": without - grid_cost + delta * off_price}
 
 
 def hold_battery(period, grid_online, waste_if_held_kwh, held):

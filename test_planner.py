@@ -146,6 +146,13 @@ class DayReport(unittest.TestCase):
         self.assertAlmostEqual(r["energy_in"], 1.0); self.assertAlmostEqual(r["loss_pct"], 10)
         self.assertAlmostEqual(r["batt_eff"], 90)                     # 0.9 of the 1.0 kWh charged is still there
 
+    def test_battery_gain_counts_toward_savings(self):
+        rows = [(at(2), 50, 0, 1000, 0, 5000), (at(3), 50, 0, 0, 2000, 7900),   # 1 kWh grid charge, then 2 kWh solar
+                (at(4), 50, 0, 0, 0, 7900)]                                         # +2.9 kWh in the battery
+        r = day_report(rows, self.CAP, max_gap_s=3600)
+        self.assertAlmostEqual(r["battery_value"], 2.9 * self.OFF)
+        self.assertAlmostEqual(r["saved"], 2.9 * self.OFF - 1.0 * self.OFF)   # grid charge paid, stored solar credited
+
     def test_meter_gap_is_reported_not_hidden(self):
         rows = [(at(2), 50, 0, 1000, 0, 5000), (at(3), 50, 0, 0, 0, 6100)]  # meters say more stored than went in
         r = day_report(rows, self.CAP, max_gap_s=3600)
