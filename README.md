@@ -2,7 +2,7 @@
 
 A local dashboard for an EcoFlow Smart Home Panel 2 with Delta Pro Ultra batteries. It also does automatic grid charging for **PG&E EV2-A**.
 
-The automation works like this: it reads the hourly sunlight forecast from [Open-Meteo](https://open-meteo.com), which is free and needs no key. The forecast already reflects cloud cover and drops to zero after sunset. From it, the planner estimates how much solar will reach the batteries before 3 pm, when part-peak starts. If the predicted level at 3 pm is below **min %** (default 60), it turns on SHP2 **force charge** (`chNForceCharge`) just long enough to cover the shortfall. It never grid-charges during part-peak or peak. Set your latitude/longitude and array size on the dashboard; until then solar counts as 0.
+The automation works like this: it reads the hourly sunlight forecast from [Open-Meteo](https://open-meteo.com), which is free and needs no key. The forecast already reflects cloud cover and drops to zero after sunset. From it, the planner estimates how much solar will reach the batteries before 3 pm, when part-peak starts. If the predicted level at 3 pm is below the minimum (**60%**, or **80%** when the forecast shows little sun after 3 pm, under 300 Wh/m²; both adjustable), it turns on SHP2 **force charge** (`chNForceCharge`) just long enough to cover the shortfall. It never grid-charges during part-peak or peak. Set your latitude/longitude and array size on the dashboard; until then solar counts as 0.
 
 ```bash
 cp .env.example .env      # add access key + secret key (panel SN is auto-detected)

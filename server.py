@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 
 from db import DB
 from ecoflow_api import SSL_CTX, EcoFlow
-from planner import ROUND_TRIP, deadline_of, decide, hm12, price_at, savings, fit_array_kw, solar_wh, tou_period
+from planner import ROUND_TRIP, afternoon_sun, deadline_of, decide, target_soc, hm12, price_at, savings, fit_array_kw, solar_wh, tou_period
 
 HERE = Path(__file__).parent
 TZ = ZoneInfo("America/Los_Angeles")
@@ -62,7 +62,9 @@ DEFAULTS = {
     "mode": "dry-run",           # off | dry-run | auto
     "offpeak_start": "00:00",
     "offpeak_end": "15:00",      # EV2-A part-peak starts 3pm: deadline for min_soc
-    "min_soc": 60,               # battery % wanted by the deadline (solar + grid)
+    "min_soc": 60,               # battery % wanted by the deadline when the afternoon is sunny
+    "min_soc_cloudy": 80,        # ...when little/no sun is forecast after the deadline (or no forecast)
+    "sunny_after_wh": 300,       # forecast sunlight after the deadline (Wh/m2) that counts as "sunny"
     "lat": 0.0, "lon": 0.0,      # location for the weather forecast; 0,0 = no forecast
     "pv_kw": 0.0,                # fallback until history is learned: array kW DC; 0 = ignore solar
     "pv_pr": 0.8,                # fallback performance ratio (losses, tilt, shading)
@@ -71,7 +73,7 @@ DEFAULTS = {
     "margin_min": 30,
     "charging_by_us": False,     # persisted so a restart can still turn off what we turned on
 }
-NUMERIC = {"min_soc", "lat", "lon", "pv_kw", "pv_pr", "capacity_wh", "charge_w", "margin_min"}
+NUMERIC = {"min_soc", "min_soc_cloudy", "sunny_after_wh", "lat", "lon", "pv_kw", "pv_pr", "capacity_wh", "charge_w", "margin_min"}
 
 _saved = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
 cfg = {k: _saved.get(k, v) for k, v in DEFAULTS.items()}  # drops settings from older versions
@@ -287,6 +289,8 @@ def tick():
             c["pv_kw"], c["pv_pr"], c["pv_source"] = round(fit_kw, 2), 1.0, f"learned from {fit_n} readings"
         else:
             c["pv_source"] = f"manual setting (learning: {fit_n}/{MIN_SAMPLES} readings)"
+        c["sun_after_wh"] = afternoon_sun(now, c, hourly)
+        c["min_soc"], c["target_why"] = target_soc(c, c["sun_after_wh"])
         pv_wh = solar_wh(now, deadline, hourly, c["pv_kw"], c["pv_pr"]) if c["pv_kw"] else 0.0
         d = decide(now, s["soc"], c, pv_wh, cfg["charging_by_us"])
         charge, reason, start_at = d["charge"], d["reason"], d["start_at"]
@@ -305,8 +309,9 @@ def tick():
             state["lastWould"] = None
         period, season, price = tou_period(now)
         saved = month_savings(now, c["capacity_wh"])
-        forecast = [{"hour": f"{t:%H}", "cloud": cc, "ghi": round(ghi or 0), "kw": round((ghi or 0) / 1000 * c["pv_kw"] * c["pv_pr"], 2)}
-                    for t, ghi, cc in (w["hourly"] if w else []) if t.date() == now.date() and (ghi or 0) > 0]
+        # Open-Meteo values are the mean of the hour ending at t, so label each bar with the hour it covers.
+        forecast = [{"hour": f"{t - timedelta(hours=1):%H}", "cloud": cc, "ghi": round(ghi or 0), "kw": round((ghi or 0) / 1000 * c["pv_kw"] * c["pv_pr"], 2)}
+                    for t, ghi, cc in (w["hourly"] if w else []) if (t - timedelta(hours=1)).date() == now.date() and (ghi or 0) > 0]
         state.update(status=s, raw=raw, error=weather["error"], updated=now.isoformat(timespec="seconds"), decision={
             "charge": charge, "kind": d["kind"], "reason": reason, "startAt": start_at and start_at.strftime("%H:%M"),
             "projectedSoc": d["projected_soc"], "solarKwh": round(pv_wh / 1000, 1),
@@ -389,7 +394,7 @@ class Handler(BaseHTTPRequestHandler):
                             cfg[k] = datetime.strptime(v, "%H:%M").strftime("%H:%M")  # "8:00" -> "08:00"
                         elif k in NUMERIC:
                             v = float(v)
-                            if (v < 0 and k not in ("lat", "lon")) or (k.endswith("soc") and v > 100):
+                            if (v < 0 and k not in ("lat", "lon")) or (k in ("min_soc", "min_soc_cloudy") and v > 100):
                                 raise ValueError(f"{k} out of range")
                             cfg[k] = v
                         else:

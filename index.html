@@ -260,7 +260,7 @@
       <div class="fact"><svg class="ic"><use href="#i-target"/></svg><div><span class="label" id="proj-l">Expected by deadline (no grid)</span><b class="num" id="proj">–</b></div></div>
       <div class="fact"><svg class="ic"><use href="#i-sun"/></svg><div><span class="label">Solar before deadline</span><b class="num" id="pvkwh">–</b></div></div>
       <div class="fact"><svg class="ic"><use href="#i-panel"/></svg><div><span class="label">Solar array</span><b class="num" id="array">–</b><span class="mute" style="font-size:12px" id="arraysrc"></span></div></div>
-      <div class="fact"><svg class="ic"><use href="#i-sunrise"/></svg><div><span class="label">Daylight</span><b class="num" id="sun">–</b></div></div>
+      <div class="fact"><svg class="ic"><use href="#i-sunrise"/></svg><div><span class="label">Daylight</span><b class="num" id="sun">–</b><span class="mute" style="font-size:12px" id="sun-after"></span></div></div>
     </div>
 
     <div class="fc-wrap"><div class="fc" id="fc" role="img"></div></div>
@@ -294,7 +294,9 @@
       <form id="cfg" onsubmit="saveCfg(event)" novalidate hidden>
         <label class="field">Cheap window starts<input name="offpeak_start" type="time"></label>
         <label class="field">Deadline (price rises)<input name="offpeak_end" type="time"></label>
-        <label class="field">Minimum % by deadline<input name="min_soc" type="number" min="10" max="100"></label>
+        <label class="field">Minimum % by deadline<small>When the afternoon is sunny</small><input name="min_soc" type="number" min="10" max="100"></label>
+        <label class="field">Minimum % if no afternoon sun<small>Little or no sun after the deadline</small><input name="min_soc_cloudy" type="number" min="10" max="100"></label>
+        <label class="field">Sunny if afternoon sunlight ≥<small>Wh/m² from the deadline to sunset (300 typical)</small><input name="sunny_after_wh" type="number" min="0" step="50"></label>
         <label class="field">Latitude<input name="lat" type="number" step="0.0001"></label>
         <label class="field">Longitude<input name="lon" type="number" step="0.0001"></label>
         <label class="field">Solar kW until learned<small>0 = ignore solar until history is learned</small><input name="pv_kw" type="number" step="0.1" min="0"></label>
@@ -410,9 +412,9 @@ async function refresh() {
     const end = t12(e.offpeak_end), sol = d.solarKwh > 0 ? `Solar adds about ${d.solarKwh} kWh` : `No solar is expected before ${end}`;
     const [title, why] = {
       outside: ['No grid charging now', `Power costs more until ${t12(e.offpeak_start)}. It only grid-charges from ${t12(e.offpeak_start)} to ${end}.`],
-      ok: ['On track, no grid charge needed', `${sol}, so the battery should reach ${d.projectedSoc}% by ${end}. Target is ${e.min_soc}%.`],
-      planned: [`Grid charge at ${d.startAt ? t12(d.startAt) : '–'}`, `${sol}, so the battery would only reach ${d.projectedSoc}% by ${end}. It needs ${e.min_soc}%.`],
-      charging: ['Grid charging now', `Charging so the battery reaches ${e.min_soc}% by ${end}. Without the grid it would reach ${d.projectedSoc}%.`],
+      ok: ['On track, no grid charge needed', `${sol}, so the battery should reach ${d.projectedSoc}% by ${end}. Target is ${e.min_soc}% (${e.target_why}).`],
+      planned: [`Grid charge at ${d.startAt ? t12(d.startAt) : '–'}`, `${sol}, so the battery would only reach ${d.projectedSoc}% by ${end}. It needs ${e.min_soc}% (${e.target_why}).`],
+      charging: ['Grid charging now', `Charging so the battery reaches ${e.min_soc}% by ${end} (${e.target_why}). Without the grid it would reach ${d.projectedSoc}%.`],
     }[d.kind] || [d.charge ? 'Grid charging' : 'Not charging', d.reason];
     $('stitle').textContent = title;
     $('stitle').className = 'headline' + (d.kind === 'charging' ? ' warn' : '');
@@ -430,6 +432,8 @@ async function refresh() {
     $('pvkwh').textContent = `${d.solarKwh} kWh`;
     $('array').textContent = e.pv_kw ? `${e.pv_kw} kW` : 'Not set';
     $('arraysrc').textContent = e.pv_source || '';
+    $('sun-after').textContent = e.sun_after_wh == null ? 'No forecast: aiming higher to be safe'
+      : `After ${t12(e.offpeak_end)}: ${e.sun_after_wh >= e.sunny_after_wh ? 'sunny' : 'little sun'} · ${(e.sun_after_wh / 1000).toFixed(2)} kWh/m²`;
     $('sun').textContent = d.sunrise ? `${t12(d.sunrise)} – ${t12(d.sunset)}` : (e.lat || e.lon ? 'No forecast' : 'Set location');
 
     // no array size yet -> chart sunlight (W/m2) so cloudy vs sunny is still visible

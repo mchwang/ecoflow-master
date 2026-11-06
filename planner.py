@@ -45,6 +45,25 @@ def solar_wh(now, until, hourly, pv_kw, pr):
     return total
 
 
+def afternoon_sun(now, cfg, hourly):
+    """Forecast sunlight (Wh/m2) from today's deadline to the end of the day; None without a forecast."""
+    if not hourly:
+        return None
+    start = deadline_of(now, cfg)
+    return solar_wh(start, start.replace(hour=23, minute=59), hourly, 1, 1)  # 1 kW at 1000 W/m2, pr 1 -> Wh/m2
+
+
+def target_soc(cfg, sun_after_wh):
+    """Minimum % wanted by the deadline. Little or no sun after the deadline means solar won't help
+    through peak, so aim higher. No forecast counts as no sun (charge more, never less).
+    Returns (percent, why)."""
+    sunny = sun_after_wh is not None and sun_after_wh >= cfg["sunny_after_wh"]
+    want = cfg["min_soc"] if sunny else cfg["min_soc_cloudy"]
+    why = ("no forecast" if sun_after_wh is None else
+           f"{'sunny' if sunny else 'little sun'} after {hm12(cfg['offpeak_end'])}")
+    return min(want, cfg["max_soc"]), why
+
+
 def decide(now, soc, cfg, pv_wh=0.0, charging_by_us=False):
     """Return dict(kind, charge, reason, start_at, projected_soc). kind: outside | ok | planned | charging.
 
