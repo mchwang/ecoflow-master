@@ -117,6 +117,12 @@
   .fc .after { opacity:.4; }
   .fc .cloud { display:inline-flex; align-items:center; gap:2px; }
   .caption { color:var(--mute); font-size:12px; margin:0 0 12px; }
+  .tip { position:fixed; z-index:50; pointer-events:none; min-width:190px; max-width:260px; padding:8px 10px; border-radius:10px;
+         background:var(--card2); border:1px solid var(--line); box-shadow:0 8px 24px rgb(0 0 0 / .35); font-size:12px; font-variant-numeric:tabular-nums; }
+  .tip b { display:block; margin-bottom:4px; font-size:13px; }
+  .tip div { display:flex; justify-content:space-between; gap:12px; } .tip div span:first-child { color:var(--mute); }
+  .tip p { margin:6px 0 0; color:var(--mute); }
+  [data-tip] { cursor:default; } .hr [data-tip]:hover i, .fc [data-tip]:hover i { filter:brightness(1.25); }
   .hrgrid { display:grid; gap:12px 24px; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); margin-bottom:10px; }
   .hrblock { min-width:0; }
   .hrhead { display:flex; align-items:center; gap:8px; color:var(--mute); font-size:13px; margin-bottom:6px; }
@@ -208,6 +214,7 @@
   <symbol id="i-dollar" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8m4 2V6"/></symbol>
   <symbol id="i-code" viewBox="0 0 24 24"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></symbol>
 </svg>
+<div id="tip" class="tip" role="tooltip" hidden></div>
 <main>
   <header>
     <h1><span class="badge logo"><svg class="ic"><use href="#i-zap"/></svg></span>Home Power <span id="demo" class="chip warn" hidden>Demo data</span></h1>
@@ -341,7 +348,7 @@
       <div class="hrblock" style="--c:var(--home)"><div class="hrhead"><svg class="ic"><use href="#i-home"/></svg>Home used <b class="num" id="td-home">–</b></div><div class="hr" id="hr1" role="img"></div></div>
       <div class="hrblock" style="--c:var(--grid)"><div class="hrhead"><svg class="ic"><use href="#i-plug"/></svg>From grid <b class="num" id="td-grid">–</b></div><div class="hr" id="hr2" role="img"></div></div>
     </div>
-    <p class="caption">kWh per hour today, from the readings taken every minute. Hover a bar for its value; each chart has its own scale.</p>
+    <p class="caption">kWh per hour today, from the readings taken every minute. Hover or tap a bar for that hour's details; each chart has its own scale.</p>
   </section>
 
   <section class="card"><h2><svg class="ic sm"><use href="#i-list"/></svg>Circuits</h2><ul class="circuits" id="circuits"></ul></section>
@@ -363,6 +370,24 @@ document.querySelectorAll('.card').forEach((el, i) => el.style.setProperty('--i'
 
 const esc = s => String(s ?? '–').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const w = v => v == null ? '–' : Math.abs(v) >= 1000 ? (v/1000).toFixed(2)+' kW' : Math.round(v)+' W';
+// Chart tooltips: data-tip holds escaped HTML (numbers and fixed labels only); one floating box follows the pointer.
+const span = h => `${t12(h + ':00')} – ${t12((h + 1) % 24 + ':00')}`;
+const tipHtml = (head, rows, foot) => esc(`<b>${head}</b>` + rows.map(([k, v]) => `<div><span>${k}</span><span>${v}</span></div>`).join('')
+  + (foot ? `<p>${foot}</p>` : ''));
+const hourTip = (k, h, now) => tipHtml(span(k) + (now ? ' (so far)' : ''),
+  [['Solar', h[0]], ['Home used', h[1]], ['From grid', h[2]]].map(([n, v]) => [n, `${v.toFixed(2)} kWh` + (now ? '' : ` · avg ${w(v * 1000)}`)]),
+  h[1] ? `${Math.round(Math.min(1, h[2] / h[1]) * 100)}% of home use came from the grid` : '');
+function tipAt(e) {
+  const el = e.target.closest?.('[data-tip]'), tip = $('tip');
+  if (!el) { tip.hidden = true; return; }
+  if (tip.dataset.for !== el.dataset.tip) { tip.innerHTML = el.dataset.tip; tip.dataset.for = el.dataset.tip; }
+  tip.hidden = false;
+  const r = tip.getBoundingClientRect(), x = Math.min(e.clientX + 14, innerWidth - r.width - 8), y = e.clientY - r.height - 12;
+  tip.style.left = Math.max(8, x) + 'px'; tip.style.top = (y < 8 ? e.clientY + 18 : y) + 'px';
+}
+document.addEventListener('pointermove', tipAt);
+document.addEventListener('pointerdown', tipAt);  // tap on a phone
+addEventListener('scroll', () => { $('tip').hidden = true; }, { passive: true });
 const on = v => v === true || v === 1 || /_ON$/.test(v ?? '');
 const icon = (id, cls = 'ic sm') => `<svg class="${cls}" aria-hidden="true"><use href="#i-${id}"/></svg>`;
 // "15:00" or ISO timestamp -> "3 PM" / "10:24 AM"
@@ -451,7 +476,7 @@ async function refresh() {
     const max = Math.max(0.01, ...hrs.map(h => h[i]));
     $('hr' + i).innerHTML = hrs.length ? Array.from({ length: 24 }, (_, k) => {  // whole day, so the three charts line up
       const v = hrs[k]?.[i];
-      return `<div class="col${v == null ? ' future' : ''}"${v == null ? '' : ` title="${t12(k + ':00')}: ${v.toFixed(2)} kWh"`}>
+      return `<div class="col${v == null ? ' future' : ''}"${v == null ? '' : ` data-tip="${hourTip(k, hrs[k], k === hrs.length - 1)}"`}>
         <i style="height:${Math.round((v || 0) / max * 64)}px"></i>${k % 6 ? '' : `<span class="t">${t12(k + ':00')}</span>`}</div>`;
     }).join('') : '<span class="mute">No readings yet today.</span>';
     $('hr' + i).setAttribute('aria-label', `${name} kWh per hour today: ` + hrs.map((h, k) => `${t12(k + ':00')} ${h[i].toFixed(2)}`).join('; '));
@@ -499,7 +524,10 @@ async function refresh() {
     $('fc-cap').textContent = (useKw ? 'Forecast solar output per hour (kW).' : 'Forecast sunlight per hour (W/m²); switches to kW once the array size is known.')
       + " Faded hours are after the deadline and don't count.";
     if (!fcDrawn && d.forecast.length) { $('fc').classList.add('grow'); setTimeout(() => $('fc').classList.remove('grow'), 1800); fcDrawn = true; }
-    $('fc').innerHTML = d.forecast.length ? d.forecast.map((f, k) => `<div class="col${f.hour >= dl ? ' after' : ''}">
+    $('fc').innerHTML = d.forecast.length ? d.forecast.map((f, k) => `<div class="col${f.hour >= dl ? ' after' : ''}" data-tip="${
+        tipHtml(span(+f.hour), [['Sunlight', `${f.ghi} W/m²`], ['Cloud cover', `${f.cloud}%`],
+          ...(useKw ? [['Expected solar', `${f.kw.toFixed(2)} kWh (avg ${w(f.kw * 1000)})`]] : [['Expected solar', 'array size not learned yet']])],
+          f.hour >= dl ? `After the ${end} deadline: not counted` : `Counts toward ${e.min_soc}% by ${end}`)}">
         <span class="kw">${fmt(f)}</span><i style="height:${Math.round(val(f)/max*72)}px;--k:${k}"></i>
         <span>${t12(f.hour + ':00')}</span><span class="cloud">${icon(f.cloud >= 50 ? 'cloud' : 'sun', 'ic sm')}${f.cloud}%</span></div>`).join('')
       : '<span class="mute">No forecast yet. Set your location in Settings.</span>';
