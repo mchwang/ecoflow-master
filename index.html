@@ -65,7 +65,7 @@
 
   /* energy flow diagram */
   .flowcard { display:grid; gap:4px; }
-  .flow { width:100%; max-height:300px; display:block; }
+  .flow { width:100%; max-height:340px; display:block; margin:auto 0; }
   .flow text { fill:var(--fg); font:600 13px "Plus Jakarta Sans", system-ui, sans-serif; }
   .flow text.sub { fill:var(--mute); font-weight:500; font-size:12px; }
   .flow .base { stroke:var(--line); stroke-width:4; fill:none; stroke-linecap:round; }
@@ -83,13 +83,17 @@
   .flow .glow { animation:glow 2.4s ease-in-out infinite; }
   @keyframes glow { 50% { opacity:.45; } }
 
+  .stack { display:grid; gap:16px; align-content:start; min-width:0; }
+  table.compact td { padding:6px; }
   .bats { display:grid; gap:14px; }
   .batt { display:grid; grid-template-columns:auto 1fr auto; gap:12px; align-items:center; }
   .batt .name { font-weight:600; } .batt .meta { color:var(--mute); font-size:12px; display:flex; gap:10px; flex-wrap:wrap; }
   .batt .meta span { display:inline-flex; align-items:center; gap:4px; }
   .batt .pct { font-size:22px; font-weight:700; }
 
-  .status { display:flex; gap:12px; align-items:flex-start; font-size:17px; margin-bottom:14px; }
+  .status { display:flex; gap:12px; align-items:flex-start; margin-bottom:14px; }
+  .headline { font-size:18px; }
+  .why { margin:4px 0 0; color:var(--fg); opacity:.8; font-size:14px; max-width:70ch; }
   .status .badge { margin-top:-4px; }
   .facts { display:grid; gap:12px; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); margin-bottom:16px; }
   .fact { border:1px solid var(--line); border-radius:12px; padding:10px 12px; display:flex; gap:10px; align-items:flex-start; background:var(--card2); }
@@ -145,7 +149,7 @@
   td .mini i { display:block; height:100%; background:var(--home); border-radius:3px; transition:width .6s ease-out; }
   .pill { display:inline-flex; align-items:center; gap:5px; font-size:12px; padding:2px 8px; border-radius:999px; background:var(--track); }
   .pill.on { color:var(--ok); background:color-mix(in srgb, var(--ok) 15%, transparent); }
-  ul.log { margin:0; padding:0; list-style:none; display:grid; gap:8px; color:var(--mute); font-size:13px; max-height:320px; overflow:auto; }
+  ul.log { margin:0; padding:0; list-style:none; display:grid; gap:8px; color:var(--mute); font-size:13px; max-height:560px; overflow:auto; align-content:start; }
   ul.log li { display:flex; gap:8px; align-items:flex-start; }
   ul.log li .ic { margin-top:2px; }
   pre { overflow-x:auto; font-size:12px; max-height:420px; margin:12px 0 0; }
@@ -235,15 +239,19 @@
         <text x="222" y="218">Battery</text><text id="t-batt" class="sub" x="222" y="235">–</text>
       </svg>
     </div>
-    <div class="card">
-      <h2><svg class="ic sm"><use href="#i-battery"/></svg>Batteries</h2>
-      <div class="bats" id="bats"></div>
+    <div class="stack">
+      <div class="card">
+        <h2><svg class="ic sm"><use href="#i-battery"/></svg>Batteries</h2>
+        <div class="bats" id="bats"></div>
+      </div>
+      <div class="card"><h2><svg class="ic sm"><use href="#i-gauge"/></svg>Panel settings</h2><div class="table"><table id="settings" class="compact"></table></div></div>
     </div>
   </section>
 
   <section class="card" aria-labelledby="sc-h">
     <h2 id="sc-h"><svg class="ic sm"><use href="#i-zap"/></svg>Smart charge · PG&amp;E EV2-A</h2>
-    <div class="status" aria-live="polite"><span class="badge" id="sbadge"><svg class="ic"><use id="sicon" href="#i-bolt-batt"/></svg></span><div><b id="stitle">–</b> <span id="sreason" class="mute"></span></div></div>
+    <div class="status" aria-live="polite"><span class="badge" id="sbadge"><svg class="ic"><use id="sicon" href="#i-bolt-batt"/></svg></span>
+      <div><div class="row" style="gap:10px"><b id="stitle" class="headline">–</b><span class="chip" id="smode"></span></div><p id="sreason" class="why"></p></div></div>
 
     <div class="facts">
       <div class="fact"><svg class="ic"><use href="#i-target"/></svg><div><span class="label" id="proj-l">Expected by deadline (no grid)</span><b class="num" id="proj">–</b></div></div>
@@ -296,11 +304,9 @@
   </section>
 
   <section class="two">
-    <div class="card"><h2><svg class="ic sm"><use href="#i-gauge"/></svg>Panel settings</h2><div class="table"><table id="settings"></table></div></div>
+    <div class="card"><h2><svg class="ic sm"><use href="#i-list"/></svg>Circuits</h2><div class="table"><table id="circuits"></table></div></div>
     <div class="card"><h2><svg class="ic sm"><use href="#i-activity"/></svg>Activity</h2><ul class="log" id="log"></ul></div>
   </section>
-
-  <section class="card"><h2><svg class="ic sm"><use href="#i-list"/></svg>Circuits</h2><div class="table"><table id="circuits"></table></div></section>
   <details class="card"><summary><svg class="ic sm"><use href="#i-code"/></svg>All raw panel data</summary><pre id="raw"></pre></details>
 </main>
 <script>
@@ -391,9 +397,24 @@ async function refresh() {
     $('sbadge').style.setProperty('--c', d.charge || d.startAt ? 'var(--warn)' : 'var(--ok)');
     $('sbadge').classList.toggle('glow', !!d.charge);
     $('sicon').setAttribute('href', d.charge ? '#i-bolt-batt' : d.startAt ? '#i-clock' : '#i-shield');
-    $('stitle').textContent = d.charge ? 'Grid charging' : d.startAt ? `Grid charge planned ${d.startAt}` : 'Not charging';
-    $('stitle').className = d.charge ? 'warn' : '';
-    $('sreason').textContent = '— ' + d.reason + ` (mode: ${st.config.mode})`;
+    const t12 = hm => { const [h, m] = hm.split(':').map(Number); return `${h % 12 || 12}${m ? ':' + String(m).padStart(2, '0') : ''} ${h < 12 ? 'AM' : 'PM'}`; };
+    const end = t12(e.offpeak_end), sol = d.solarKwh > 0 ? `Solar adds about ${d.solarKwh} kWh` : `No solar is expected before ${end}`;
+    const [title, why] = {
+      outside: ['No grid charging now', `Power costs more until ${t12(e.offpeak_start)}. It only grid-charges from ${t12(e.offpeak_start)} to ${end}.`],
+      ok: ['On track, no grid charge needed', `${sol}, so the battery should reach ${d.projectedSoc}% by ${end}. Target is ${e.min_soc}%.`],
+      planned: [`Grid charge at ${d.startAt ? t12(d.startAt) : '–'}`, `${sol}, so the battery would only reach ${d.projectedSoc}% by ${end}. It needs ${e.min_soc}%.`],
+      charging: ['Grid charging now', `Charging so the battery reaches ${e.min_soc}% by ${end}. Without the grid it would reach ${d.projectedSoc}%.`],
+    }[d.kind] || [d.charge ? 'Grid charging' : 'Not charging', d.reason];
+    $('stitle').textContent = title;
+    $('stitle').className = 'headline' + (d.kind === 'charging' ? ' warn' : '');
+    $('sreason').textContent = why;
+    const standby = st.config.mode === 'auto' && st.control && !st.control.leader;
+    const acts = d.kind === 'planned' || d.kind === 'charging';
+    $('smode').hidden = !acts && st.config.mode === 'auto' && !standby;
+    $('smode').innerHTML = st.config.mode === 'off' ? `<span class="dot warn"></span>Automation off · nothing will be sent`
+      : st.config.mode === 'dry-run' ? `<span class="dot warn"></span>Dry-run · logging only`
+      : standby ? `<span class="dot warn"></span>Standby · another copy is in control`
+      : `<span class="dot ok"></span>Auto`;
     $('proj-l').textContent = `Expected by ${e.offpeak_end} (no grid)`;
     $('proj').innerHTML = `${d.projectedSoc}% <span class="mute" style="font-size:13px;font-weight:400">min ${e.min_soc}%</span>`;
     $('proj').className = 'num ' + (d.projectedSoc >= e.min_soc ? 'ok' : 'warn');

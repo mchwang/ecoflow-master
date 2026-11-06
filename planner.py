@@ -40,7 +40,7 @@ def solar_wh(now, until, hourly, pv_kw, pr):
 
 
 def decide(now, soc, cfg, pv_wh=0.0, charging_by_us=False):
-    """Return dict(charge, reason, start_at, projected_soc).
+    """Return dict(kind, charge, reason, start_at, projected_soc). kind: outside | ok | planned | charging.
 
     cfg keys: capacity_wh, charge_w, min_soc (% wanted at the deadline), max_soc,
               offpeak_start/offpeak_end "HH:MM" (offpeak_end = deadline), margin_min.
@@ -50,22 +50,22 @@ def decide(now, soc, cfg, pv_wh=0.0, charging_by_us=False):
     projected = min(cfg["max_soc"], soc + pv_wh / cap * 100)
     out = {"charge": False, "start_at": None, "projected_soc": round(projected, 1)}
     if not (time.fromisoformat(cfg["offpeak_start"]) <= now.time() < time.fromisoformat(cfg["offpeak_end"])):
-        return {**out, "reason": f"Outside off-peak window ({cfg['offpeak_start']}-{cfg['offpeak_end']}); never grid-charge at high price"}
+        return {**out, "kind": "outside", "reason": f"Outside off-peak window ({cfg['offpeak_start']}-{cfg['offpeak_end']}); never grid-charge at high price"}
     solar = f"solar adds ~{pv_wh / 1000:.1f} kWh"
     # Keep charging 2% past the minimum once started, so a small forecast change doesn't flip it on and off.
     goal = min_soc + (2 if charging_by_us else 0)
     if projected >= goal:
-        return {**out, "reason": f"OK: {soc:.0f}% now, {solar} -> ~{projected:.0f}% by {cfg['offpeak_end']} (min {min_soc:.0f}%)"}
+        return {**out, "kind": "ok", "reason": f"OK: {soc:.0f}% now, {solar} -> ~{projected:.0f}% by {cfg['offpeak_end']} (min {min_soc:.0f}%)"}
     if charging_by_us:
-        return {**out, "charge": True, "reason": f"Charging: {solar}, ~{projected:.0f}% by {cfg['offpeak_end']} without grid; need {min_soc:.0f}%"}
+        return {**out, "kind": "charging", "charge": True, "reason": f"Charging: {solar}, ~{projected:.0f}% by {cfg['offpeak_end']} without grid; need {min_soc:.0f}%"}
 
     missing_wh = (min_soc - projected) / 100 * cap
     minutes = missing_wh / (cfg["charge_w"] * 0.9) * 60 + cfg["margin_min"]  # 0.9: AC charge losses
     start_at = deadline_of(now, cfg) - timedelta(minutes=minutes)
     short = f"{solar}, only ~{projected:.0f}% by {cfg['offpeak_end']} (min {min_soc:.0f}%)"
     if now >= start_at:
-        return {**out, "charge": True, "start_at": start_at, "reason": f"Short: {short}; grid charging now"}
-    return {**out, "start_at": start_at, "reason": f"Short: {short}; grid charge starts {start_at:%H:%M}"}
+        return {**out, "kind": "charging", "charge": True, "start_at": start_at, "reason": f"Short: {short}; grid charging now"}
+    return {**out, "kind": "planned", "start_at": start_at, "reason": f"Short: {short}; grid charge starts {start_at:%H:%M}"}
 
 
 def fit_array_kw(samples, max_soc, min_ghi=50):
