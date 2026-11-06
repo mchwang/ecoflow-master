@@ -185,6 +185,15 @@ class Planner(unittest.TestCase):
         self.assertFalse(decide(at(13), 62, CFG, 0, charging_by_us=True)["charge"])
         self.assertFalse(decide(at(15), 30, CFG, 0, charging_by_us=True)["charge"])  # deadline passed
 
+    def test_running_charge_pauses_when_sun_moves_start_later(self):
+        # Grid charge began at 8:46 with solar unknown; at 9:00 the array is learned and 7 kWh of sun is due by 3 PM.
+        d = decide(at(9), 15, CFG, 7000, charging_by_us=True)        # 60% needs 45%-22.8% of 30.72 kWh -> ~2.4 h + 30 m
+        self.assertEqual((d["kind"], d["charge"]), ("planned", False))
+        self.assertIn("paused", d["reason"])
+        # Close to the new start time (within 20 min) it keeps going rather than flapping off and on.
+        near = decide(d["start_at"] - timedelta(minutes=10), 15, CFG, 7000, charging_by_us=True)
+        self.assertEqual((near["kind"], near["charge"]), ("charging", True))
+
     def test_12_hour_times(self):
         self.assertEqual([hm12(x) for x in ("00:00", "09:05", "12:00", "15:00", "23:59")],
                          ["12 AM", "9:05 AM", "12 PM", "3 PM", "11:59 PM"])
