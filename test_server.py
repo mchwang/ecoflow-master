@@ -84,6 +84,18 @@ class Commands(Base):
         self.assertEqual(self.sent(), [True, False])
         self.assertFalse(server.cfg["charging_by_us"])
 
+    def test_grid_outage_stops_and_blocks_grid_charging(self):
+        server.tick(at(6))                                      # charging from the grid
+        server.demo["gridOnline"] = 0                           # outage: battery runs the house
+        server.tick(at(6, 1))
+        self.assertEqual(self.sent(), [True, False])
+        self.assertEqual(server.state["decision"]["kind"], "outage")
+        server.tick(at(6, 2))
+        self.assertEqual(self.sent(), [True, False])            # nothing more while it's down
+        server.demo["gridOnline"] = 1
+        server.tick(at(6, 3))
+        self.assertEqual(self.sent(), [True, False, True])      # back to the plan when the grid returns
+
     def test_records_solar_and_level_per_dpu(self):
         server.fetch()
         server.demo["batteries"][0].update(solarWatt=420, soc=55)
