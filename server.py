@@ -70,7 +70,8 @@ weather = {"at": 0, "key": None, "data": None, "error": None}
 def learned_kw(now, max_soc):
     return fit_array_kw(db.solar_samples(now.timestamp() - HISTORY_DAYS * 86400), max_soc)
 
-AK, SK, SN = (os.environ.get(k, "") for k in ("ECOFLOW_ACCESS_KEY", "ECOFLOW_SECRET_KEY", "ECOFLOW_SN"))
+# strip: hosting dashboards (e.g. Coolify) pass pasted quotes/whitespace through literally -> "accessKey is invalid"
+AK, SK, SN = (os.environ.get(k, "").strip().strip("'\"").strip() for k in ("ECOFLOW_ACCESS_KEY", "ECOFLOW_SECRET_KEY", "ECOFLOW_SN"))
 DEMO = not (AK and SK)
 api = None if DEMO else EcoFlow(AK, SK, os.environ.get("ECOFLOW_HOST", "https://api.ecoflow.com"))
 
