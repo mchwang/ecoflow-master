@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from ecoflow_api import sign
-from planner import decide, fit_array_kw, solar_wh, tou_period
+from planner import decide, fit_array_kw, hm12, solar_wh, tou_period
 
 TZ = ZoneInfo("America/Los_Angeles")
 CFG = {"capacity_wh": 30720, "charge_w": 4000, "min_soc": 60, "max_soc": 95,
@@ -83,6 +83,11 @@ class Planner(unittest.TestCase):
         self.assertTrue(decide(at(13), 61, CFG, 0, charging_by_us=True)["charge"])   # within 2% buffer
         self.assertFalse(decide(at(13), 62, CFG, 0, charging_by_us=True)["charge"])
         self.assertFalse(decide(at(15), 30, CFG, 0, charging_by_us=True)["charge"])  # deadline passed
+
+    def test_12_hour_times(self):
+        self.assertEqual([hm12(x) for x in ("00:00", "09:05", "12:00", "15:00", "23:59")],
+                         ["12 AM", "9:05 AM", "12 PM", "3 PM", "11:59 PM"])
+        self.assertIn("starts 10:24 AM", decide(at(6), 12, CFG, 0)["reason"])
 
     def test_tou(self):
         self.assertEqual(tou_period(at(17, month=7))[:2], ("peak", "summer"))

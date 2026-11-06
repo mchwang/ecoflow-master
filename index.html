@@ -324,6 +324,8 @@ const esc = s => String(s ?? '–').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&
 const w = v => v == null ? '–' : Math.abs(v) >= 1000 ? (v/1000).toFixed(2)+' kW' : Math.round(v)+' W';
 const on = v => v === true || v === 1 || /_ON$/.test(v ?? '');
 const icon = (id, cls = 'ic sm') => `<svg class="${cls}" aria-hidden="true"><use href="#i-${id}"/></svg>`;
+// "15:00" or ISO timestamp -> "3 PM" / "10:24 AM"
+const t12 = v => { if (!v) return '–'; const [h, m] = (v.length > 5 ? v.slice(11, 16) : v).split(':').map(Number); return `${h % 12 || 12}${m ? ':' + String(m).padStart(2, '0') : ''} ${h < 12 ? 'AM' : 'PM'}`; };
 const STALE_MS = 3 * 60 * 1000;  // server polls the panel every 60 s
 let cfgLoaded = false, last = null, fcDrawn = false;
 
@@ -376,14 +378,14 @@ async function refresh() {
   $('grid').innerHTML = s.gridOnline ? `<span class="dot ok"></span>${icon('plug')}Grid · ${esc(s.gridVolt)} V` : `<span class="dot bad live"></span><b class="bad">Grid down</b>`;
   const age = st.updated ? Date.now() - new Date(st.updated).getTime() : Infinity;
   $('upd').innerHTML = age > STALE_MS
-    ? `<span class="dot warn"></span><span class="warn">Stale · last update ${esc((st.updated || '').slice(11, 16) || 'never')}</span>`
-    : `<span class="dot ok live"></span>Live · ${esc(st.updated.slice(11, 16))}`;
+    ? `<span class="dot warn"></span><span class="warn">Stale · last update ${st.updated ? t12(st.updated) : 'never'}</span>`
+    : `<span class="dot ok live"></span>Live · ${t12(st.updated)}`;
 
   setText('soc', s.soc + '%');
   requestAnimationFrame(() => { $('socbar').style.width = s.soc + '%'; });  // animate from 0 on first load
   $('socwh').textContent = s.fullCapWh ? `${((s.remainWh ?? s.soc/100*s.fullCapWh)/1000).toFixed(1)} of ${(s.fullCapWh/1000).toFixed(1)} kWh` : '';
   setText('solar', w(s.solarWatt)); setText('load', w(s.loadWatt)); setText('gridw', w(s.gridWatt));
-  $('solar-sub').textContent = s.solarWatt > 5 ? 'producing' : (d && d.sunrise ? `sun ${d.sunrise}–${d.sunset}` : '');
+  $('solar-sub').textContent = s.solarWatt > 5 ? 'producing' : (d && d.sunrise ? `sun ${t12(d.sunrise)} – ${t12(d.sunset)}` : '');
   // panel reports 0 while on grid; then estimate from stored energy at the current load
   const mins = s.dischargeMin || (s.remainWh && s.loadWatt ? Math.round(s.remainWh / s.loadWatt * 60) : null);
   setText('left', mins == null ? '–' : `${Math.floor(mins/60)}h ${mins%60}m`);
@@ -395,7 +397,6 @@ async function refresh() {
     $('sbadge').style.setProperty('--c', d.charge || d.startAt ? 'var(--warn)' : 'var(--ok)');
     $('sbadge').classList.toggle('glow', !!d.charge);
     $('sicon').setAttribute('href', d.charge ? '#i-bolt-batt' : d.startAt ? '#i-clock' : '#i-shield');
-    const t12 = hm => { const [h, m] = hm.split(':').map(Number); return `${h % 12 || 12}${m ? ':' + String(m).padStart(2, '0') : ''} ${h < 12 ? 'AM' : 'PM'}`; };
     const end = t12(e.offpeak_end), sol = d.solarKwh > 0 ? `Solar adds about ${d.solarKwh} kWh` : `No solar is expected before ${end}`;
     const [title, why] = {
       outside: ['No grid charging now', `Power costs more until ${t12(e.offpeak_start)}. It only grid-charges from ${t12(e.offpeak_start)} to ${end}.`],
@@ -413,13 +414,13 @@ async function refresh() {
       : st.config.mode === 'dry-run' ? `<span class="dot warn"></span>Dry-run · logging only`
       : standby ? `<span class="dot warn"></span>Standby · another copy is in control`
       : `<span class="dot ok"></span>Auto`;
-    $('proj-l').textContent = `Expected by ${e.offpeak_end} (no grid)`;
+    $('proj-l').textContent = `Expected by ${t12(e.offpeak_end)} (no grid)`;
     $('proj').innerHTML = `${d.projectedSoc}% <span class="mute" style="font-size:13px;font-weight:400">min ${e.min_soc}%</span>`;
     $('proj').className = 'num ' + (d.projectedSoc >= e.min_soc ? 'ok' : 'warn');
     $('pvkwh').textContent = `${d.solarKwh} kWh`;
     $('array').textContent = e.pv_kw ? `${e.pv_kw} kW` : 'Not set';
     $('arraysrc').textContent = e.pv_source || '';
-    $('sun').textContent = d.sunrise ? `${d.sunrise} – ${d.sunset}` : (e.lat || e.lon ? 'No forecast' : 'Set location');
+    $('sun').textContent = d.sunrise ? `${t12(d.sunrise)} – ${t12(d.sunset)}` : (e.lat || e.lon ? 'No forecast' : 'Set location');
 
     // no array size yet -> chart sunlight (W/m2) so cloudy vs sunny is still visible
     const useKw = e.pv_kw > 0, val = f => useKw ? f.kw : f.ghi, fmt = f => useKw ? f.kw.toFixed(1) : f.ghi;
@@ -429,7 +430,7 @@ async function refresh() {
     if (!fcDrawn && d.forecast.length) { $('fc').classList.add('grow'); setTimeout(() => $('fc').classList.remove('grow'), 1800); fcDrawn = true; }
     $('fc').innerHTML = d.forecast.length ? d.forecast.map((f, k) => `<div class="col${f.hour >= dl ? ' after' : ''}">
         <span class="kw">${fmt(f)}</span><i style="height:${Math.round(val(f)/max*72)}px;--k:${k}"></i>
-        <span>${+f.hour % 12 || 12}${+f.hour < 12 ? 'a' : 'p'}</span><span class="cloud">${icon(f.cloud >= 50 ? 'cloud' : 'sun', 'ic sm')}${f.cloud}%</span></div>`).join('')
+        <span>${t12(f.hour + ':00')}</span><span class="cloud">${icon(f.cloud >= 50 ? 'cloud' : 'sun', 'ic sm')}${f.cloud}%</span></div>`).join('')
       : '<span class="mute">No forecast yet. Set your location in Settings.</span>';
     $('fc').setAttribute('aria-label', d.forecast.length
       ? `Forecast ${useKw ? 'solar kW' : 'sunlight W/m²'} by hour: ` + d.forecast.map(f => `${+f.hour}:00 ${fmt(f)}, ${f.cloud}% cloud`).join('; ')
