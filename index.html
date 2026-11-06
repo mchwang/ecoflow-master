@@ -136,7 +136,8 @@
   [data-tip] { cursor:default; } .hr [data-tip]:hover i, .fc [data-tip]:hover i { filter:brightness(1.25); }
   .dayhead { display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:space-between; margin-bottom:10px; }
   .dayhead h2 { margin:0; }
-  .daynav { display:flex; gap:6px; align-items:center; } .daynav button { min-width:44px; padding:0 12px; }
+  .daynav { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .daynav button { flex:none; min-width:44px; padding:0 12px; white-space:nowrap; }  /* never squeeze 'Today' */
   .daynav input { width:auto; }
   .subh { font-size:14px; color:var(--mute); text-transform:uppercase; letter-spacing:.06em; margin:18px 0 8px; font-weight:600; }
   .sankey { display:block; width:100%; min-width:620px; height:280px; }
