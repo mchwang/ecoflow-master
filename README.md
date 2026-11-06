@@ -4,7 +4,9 @@ A local dashboard for an EcoFlow Smart Home Panel 2 with Delta Pro Ultra batteri
 
 The automation works like this: it reads the hourly sunlight forecast from [Open-Meteo](https://open-meteo.com), which is free and needs no key. The forecast already reflects cloud cover and drops to zero after sunset. From it, the planner estimates how much solar will reach the batteries before 3 pm, when part-peak starts. If the predicted level at 3 pm is below the minimum (**60%**, or **80%** when the forecast shows little sun after 3 pm, under 300 Wh/m²; both adjustable), it turns on SHP2 **force charge** (`chNForceCharge`) just long enough to cover the shortfall. It never grid-charges during part-peak or peak.
 
-The panel runs the house from the battery at any hour (down to its backup reserve), so the prediction is an hour-by-hour simulation: solar goes in, the house's usual load for that hour (learned from the last 14 days) comes out, and solar above the panel's max charge level counts as wasted. The grid charge starts as late as possible and pauses if the sun moves that time later. If the spare sun after 3 pm (beyond what the house uses) would overfill the battery, the 3 pm target is lowered so that sun fits. Set your latitude/longitude and array size on the dashboard; until then solar counts as 0.
+The panel runs the house from the battery at any hour (down to its backup reserve), so the prediction is an hour-by-hour simulation: solar goes in, the house's usual load for that hour (learned from the last 14 days) comes out, and solar above the panel's max charge level counts as wasted. The grid charge starts as late as possible and pauses if the sun moves that time later. If the spare sun after 3 pm (beyond what the house uses) would overfill the battery, the 3 pm target is lowered so that sun fits.
+
+**Discharge control.** The panel never runs the house from the battery below its backup reserve, so the app sets that reserve (`backupReserveSoc`, sent with `PD303_APP_SET`; tested on the panel 2026-11-06). Off-peak it **holds** the battery (reserve = current level, raised in 2% steps as solar fills it), because running the house from the battery and refilling it from the grid costs ~10% more than grid power directly. It **releases** it (reserve = the Outage reserve setting, default 20%) from 3 pm, in a grid outage, or when holding would waste solar before 3 pm (forecast overflow above 0.2 kWh; back to holding below 0.05 kWh). Only the copy in control on Auto sends; any other copy releases a hold it left. Set the panel's operating mode to Self-powered. Set your latitude/longitude and array size on the dashboard; until then solar counts as 0.
 
 
 **DPU balancing.** While DPU 1 (the larger battery, which gets the afternoon sun) is nearly full (90%), the app pauses DPU 2 with the panel's battery enable switch (`ch2EnableSet`). The house then drains DPU 1 first, making room for its afternoon solar. DPU 2 resumes when DPU 1 drops to 75%, the grid goes down, grid charging starts, or little sunlight is left today. The app only resumes a battery it paused itself. Balancing has its own Off / Dry-run / Auto setting and starts in Dry-run. It only matters while the batteries are running the house.
@@ -20,7 +22,7 @@ Modes:
 - **Dry-run** (default): logs what it would do.
 - **Auto:** sends the commands to the panel.
 
-The "Force charge ON/OFF" buttons are manual overrides, and the automation won't undo them.
+The "Force charge ON/OFF" buttons send the command once; in Auto the plan stays in control and sets it back to what it wants at the next poll (within a minute). They are for testing, not an override.
 Settings are saved to `config.json`. The EV2-A prices in `planner.py` are the 2026-03-01 tariff; update them when PG&E changes rates.
 
 ## Data

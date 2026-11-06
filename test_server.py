@@ -35,12 +35,13 @@ class Base(unittest.TestCase):
         self.addCleanup(server.db.conn.close)
         server.cfg.clear()
         server.cfg.update(server.DEFAULTS, mode="auto", margin_min=900)  # big margin: charge window open all morning
-        for k in ("leader", "holder", "lastWould", "lastBal", "onBattery"):
+        for k in ("leader", "holder", "lastWould", "lastBal", "onBattery", "lastHold"):
             server.state.pop(k, None)
         server.state["status"] = None
         p1 = mock.patch.object(server, "set_force_charge", wraps=server.set_force_charge)
         p2 = mock.patch.object(server, "set_dpu2", wraps=server.set_dpu2)
-        self.force, self.dpu2 = p1.start(), p2.start()
+        p3 = mock.patch.object(server, "set_reserve", wraps=server.set_reserve)
+        self.force, self.dpu2, self.reserve = p1.start(), p2.start(), p3.start()
         self.addCleanup(mock.patch.stopall)
 
     def sent(self):
@@ -60,7 +61,7 @@ class Commands(Base):
         server.cfg["mode"] = "dry-run"
         server.tick(at(6))
         self.assertEqual(self.sent(), [])
-        self.assertIn("[dry-run] would turn force charge ON", server.state["log"][0])
+        self.assertTrue(any("[dry-run] would turn force charge ON" in l for l in server.state["log"]))
 
     def test_standby_never_sends(self):
         server.db.claim_lease("other", time.time(), server.LEASE_TTL, force=True)
@@ -68,14 +69,13 @@ class Commands(Base):
         self.assertEqual(self.sent(), [])
         self.assertFalse(server.state["control"]["leader"])
 
-    def test_manual_off_stays_off_for_the_day(self):
-        server.tick(at(6))
-        server.manual_force(False, now=at(6, 5))
-        server.tick(at(6, 6))
-        self.assertEqual(self.sent(), [True, False])            # not switched back on
-        self.assertEqual(server.state["decision"]["kind"], "manual")
-        server.tick(at(6, day=7))                               # next morning: automation resumes
+    def test_manual_buttons_dont_take_control_away(self):
+        server.tick(at(6))                                      # the plan grid-charges
+        server.manual_force(False, now=at(6, 5))                # you press Force charge off
+        self.assertEqual(self.sent(), [True, False])
+        server.tick(at(6, 6))                                   # the plan still wants it: back on
         self.assertEqual(self.sent(), [True, False, True])
+        self.assertNotEqual(server.state["decision"]["kind"], "manual")
 
     def test_own_charge_stopped_after_window_even_on_standby(self):
         server.tick(at(6))                                      # we start a charge
@@ -101,6 +101,49 @@ class Commands(Base):
         s.update(gridWatt=900, soc=20)                           # all from grid again
         server.tick(at(21))
         self.assertEqual(len(taken()), 2); self.assertIn("House back on grid", taken()[0])
+
+    def reserves(self):
+        return [c.args[1] for c in self.reserve.call_args_list]
+
+    def test_holds_battery_off_peak_then_releases_at_3pm(self):
+        soc = server.fetch()[0]["soc"]
+        server.tick(at(6))
+        self.assertEqual(self.reserves(), [round(soc)])         # held: reserve = current level
+        server.tick(at(15, 1))
+        self.assertEqual(self.reserves(), [round(soc), 20])     # part-peak: back to the outage floor
+        self.assertIsNone(server.cfg["reserve_held"])
+
+    def test_held_reserve_follows_the_battery_up(self):
+        s = server.fetch()[0]; s["soc"] = 40
+        server.tick(at(6))
+        s["soc"] = 41; server.tick(at(6, 1))                    # +1%: no command
+        s["soc"] = 43; server.tick(at(6, 2))                    # +3%: raise
+        self.assertEqual(self.reserves(), [40, 43])
+
+    def test_outage_and_handover_release_the_battery(self):
+        server.tick(at(6))
+        server.demo["gridOnline"] = 0
+        server.tick(at(6, 1))
+        self.assertEqual(self.reserves()[-1], 20)
+        server.demo["gridOnline"] = 1
+        server.tick(at(6, 2))                                   # held again
+        server.db.claim_lease("other", time.time(), server.LEASE_TTL, force=True)
+        server.tick(at(6, 3))                                   # another copy in control: never leave it held
+        self.assertEqual(self.reserves()[-1], 20)
+
+    def test_releases_when_holding_would_waste_solar(self):
+        server.cfg.update(pv_kw=40.0, pv_pr=1.0, lat=1.0)       # a huge array: holding would overflow
+        sunny = {"hourly": [(at(h), 900, 0) for h in range(7, 18)], "sunrise": "06:38", "sunset": "17:04"}
+        with mock.patch.object(server, "get_weather", return_value=sunny):
+            server.tick(at(8))
+        self.assertEqual(self.reserves(), [])                   # never held
+        self.assertIn("solar", server.state["decision"]["battery"]["why"])
+
+    def test_dry_run_never_holds(self):
+        server.cfg["mode"] = "dry-run"
+        server.tick(at(6))
+        self.assertEqual(self.reserves(), [])
+        self.assertTrue(any("would hold the battery" in l for l in server.state["log"]))
 
     def test_grid_outage_stops_and_blocks_grid_charging(self):
         server.tick(at(6))                                      # charging from the grid

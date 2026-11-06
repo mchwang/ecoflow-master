@@ -248,6 +248,25 @@ def day_report(rows, cap_wh, max_gap_s=300):
             "cost_without": without, "grid_cost": grid_cost, "saved": without - grid_cost}
 
 
+def hold_battery(period, grid_online, waste_if_held_kwh, held):
+    """Should the battery be held (house on grid) right now? Returns (hold, reason).
+
+    Off-peak, running the house from the battery and refilling it from the grid costs ~10% more than
+    using grid power directly, so the battery is saved for part-peak/peak. Exceptions: an outage, and
+    solar that would overflow a held battery before the deadline (then the house uses the battery to make
+    room). Gap between 0.05 and 0.2 kWh keeps the last state, so it doesn't flip every minute.
+    """
+    if not grid_online:
+        return False, "grid is down: whole battery available for backup"
+    if period != "off-peak":
+        return False, f"{period}: the battery runs the house"
+    if waste_if_held_kwh > 0.2:
+        return False, f"holding would waste ~{waste_if_held_kwh:.1f} kWh of solar, so the house uses the battery to make room"
+    if held or waste_if_held_kwh < 0.05:
+        return True, "off-peak: house on cheap grid power, battery saved for 3 PM"
+    return False, "a little solar would overflow: the battery keeps running the house"
+
+
 def balance(dpu1_soc, grid_online, grid_charging, sun_left, sun_min, held, cfg):
     """Should DPU 2 be paused so the house drains DPU 1 first?
 

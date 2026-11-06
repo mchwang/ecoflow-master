@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from ecoflow_api import sign
-from planner import afternoon_sun, balance, daily_solar_kwh, day_report, decide, fit_hourly_kw, hourly_kwh, room_target, simulate, solar_wh_hourly, target_soc, fit_array_kw, hm12, solar_wh, tou_period
+from planner import afternoon_sun, balance, hold_battery, daily_solar_kwh, day_report, decide, fit_hourly_kw, hourly_kwh, room_target, simulate, solar_wh_hourly, target_soc, fit_array_kw, hm12, solar_wh, tou_period
 
 TZ = ZoneInfo("America/Los_Angeles")
 CFG = {"capacity_wh": 30720, "charge_w": 4000, "min_soc": 60, "max_soc": 95,
@@ -204,6 +204,18 @@ class Simulate(unittest.TestCase):
     def test_decide_uses_simulated_level(self):
         d = decide(at(6), 30, CFG, 5000, projected=20)         # sun would add, but the house uses more
         self.assertEqual(d["projected_soc"], 20); self.assertEqual(d["kind"], "planned")
+
+
+class HoldBattery(unittest.TestCase):
+    def test_rules(self):
+        h = lambda period="off-peak", grid=True, waste=0.0, held=False: hold_battery(period, grid, waste, held)[0]
+        self.assertTrue(h())                                   # off-peak: house on cheap grid, battery saved for 3 PM
+        self.assertFalse(h("part-peak")); self.assertFalse(h("peak"))   # expensive hours: battery runs the house
+        self.assertFalse(h(grid=False, held=True))             # outage: battery free for backup
+        self.assertFalse(h(waste=0.5, held=True))              # holding would waste solar: use the battery to make room
+        self.assertTrue(h(waste=0.1, held=True))               # small overflow: stay held (no flapping)
+        self.assertFalse(h(waste=0.1, held=False))             # ...and stay released
+        self.assertIn("solar", hold_battery("off-peak", True, 0.5, False)[1])
 
 
 class Planner(unittest.TestCase):
