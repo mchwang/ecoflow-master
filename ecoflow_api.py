@@ -37,7 +37,7 @@ except ImportError:
 
 
 class EcoFlow:
-    def __init__(self, access_key, secret_key, host="https://api.ecoflow.com"):
+    def __init__(self, access_key, secret_key, host="https://api-a.ecoflow.com"):
         self.ak, self.sk, self.host = access_key, secret_key, host.rstrip("/")
 
     def _call(self, method, path, params=None):

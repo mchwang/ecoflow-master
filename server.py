@@ -73,7 +73,9 @@ def learned_kw(now, max_soc):
 # strip: hosting dashboards (e.g. Coolify) pass pasted quotes/whitespace through literally -> "accessKey is invalid"
 AK, SK, SN = (os.environ.get(k, "").strip().strip("'\"").strip() for k in ("ECOFLOW_ACCESS_KEY", "ECOFLOW_SECRET_KEY", "ECOFLOW_SN"))
 DEMO = not (AK and SK)
-api = None if DEMO else EcoFlow(AK, SK, os.environ.get("ECOFLOW_HOST", "https://api.ecoflow.com"))
+# api-a (Americas), not the global api.ecoflow.com: that routes by caller location, so a VPS in Europe
+# lands on the EU server, which rejects US keys with 8513 "accessKey is invalid".
+api = None if DEMO else EcoFlow(AK, SK, os.environ.get("ECOFLOW_HOST") or "https://api-a.ecoflow.com")
 
 
 def find_panel():
