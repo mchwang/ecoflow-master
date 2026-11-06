@@ -153,7 +153,7 @@ def savings(rows, day_start, initial_kwh=0.0, initial_cost_per_kwh=None, max_gap
     return out
 
 
-def balance(dpu1_soc, dpu2_soc, grid_online, grid_charging, sun_left_wh, held, cfg):
+def balance(dpu1_soc, grid_online, grid_charging, sun_left_wh, held, cfg):
     """Should DPU 2 be paused so the house drains DPU 1 first?
 
     DPU 1 (bigger, sunnier in the afternoon) nearly full -> pause DPU 2 so DPU 1 makes room for its

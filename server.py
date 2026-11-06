@@ -72,6 +72,7 @@ DEFAULTS = {
     "charge_w": 0,               # 0 = use the panel's chargeWattPower setting
     "margin_min": 30,
     "charging_by_us": False,     # persisted so a restart can still turn off what we turned on
+    "manual_off_until": 0,       # unix ts: you turned grid charging off by hand; no auto-charge until then
     # DPU balancing: pause DPU 2 while DPU 1 is nearly full, so DPU 1 drains and makes room for its afternoon sun.
     "bal_mode": "dry-run",       # off | dry-run | auto, separate from the charging mode until verified on the panel
     "bal_full_soc": 90,          # pause DPU 2 when DPU 1 reaches this %
@@ -197,7 +198,6 @@ def summarize(d):
                      "fullCapWh": q(d, f"backupIncreInfo.Energy{n}Info.devInfo.fullCap"),
                      "temp": q(d, f"backupIncreInfo.Energy{n}Info.emsBatTemp"),
                      "solarWatt": q(d, f"backupIncreInfo.Energy{n}Info.pvChargeWatts"),
-                     "ready": q(d, f"backupIncreInfo.ch{n}Info.backupIsReady"),
                      "enabled": q(d, f"ch{n}EnableSet"), "forceCharge": q(d, f"ch{n}ForceCharge")})
     hall = q(d, "loadInfo.hall1Watt", []) or []
     circuits = []
@@ -212,7 +212,7 @@ def summarize(d):
         "gridOnline": q(d, "masterIncreInfo.gridSta"), "gridVolt": q(d, "masterIncreInfo.gridVol"),
         "gridWatt": q(d, "wattInfo.gridWatt"), "loadWatt": q(d, "wattInfo.allHallWatt"),
         "soc": q(d, "backupIncreInfo.backupBatPer"), "fullCapWh": q(d, "backupIncreInfo.backupFullCap"),
-        "remainWh": q(d, "backupIncreInfo.backupDischargeRmainBatCap"), "chargeMin": q(d, "backupInfo.backupChargeTime"), "dischargeMin": q(d, "backupInfo.backupDischargeTime"),
+        "remainWh": q(d, "backupIncreInfo.backupDischargeRmainBatCap"), "dischargeMin": q(d, "backupInfo.backupDischargeTime"),
         "backupReserveSoc": q(d, "backupReserveSoc"), "chargeWattPower": q(d, "chargeWattPower"),
         "maxChargeSoc": q(d, "foceChargeHight"), "epsMode": q(d, "epsModeInfo"),
         "stormGuard": q(d, "stormIsEnable"), "inStorm": q(d, "inStormMode"),
@@ -225,8 +225,7 @@ def effective(s):
     c = dict(cfg)
     c["capacity_wh"] = c["capacity_wh"] or s["fullCapWh"] or DPU_WH * max(1, len(s["batteries"]))
     c["charge_w"] = c["charge_w"] or s["chargeWattPower"] or 3000
-    c["max_soc"] = s["maxChargeSoc"] or 100  # panel stops charging at its max level
-    c["min_soc"] = min(c["min_soc"], c["max_soc"])
+    c["max_soc"] = s["maxChargeSoc"] or 100  # panel stops charging at its max level (target_soc caps to it)
     return c
 
 
@@ -260,7 +259,7 @@ def run_balance(s, c, now, hourly, leader):
         return {"hold": False, "held": False, "mode": cfg["bal_mode"], "why": "DPU 2 is disabled in the EcoFlow app; leaving it alone"}
     sun_left = solar_wh(now, now.replace(hour=23, minute=59), hourly, 1, 1) if hourly else None
     grid_charging = cfg["charging_by_us"] or any(b["forceCharge"] == "FORCE_CHARGE_ON" for b in bats.values())
-    hold, why = balance(bats[1]["soc"], bats[2]["soc"], bool(s["gridOnline"]), grid_charging, sun_left, cfg["bal_held"], c)
+    hold, why = balance(bats[1]["soc"], bool(s["gridOnline"]), grid_charging, sun_left, cfg["bal_held"], c)
     if hold != cfg["bal_held"] and cfg["bal_mode"] != "off":
         if cfg["bal_mode"] == "auto" and leader:
             set_dpu2(not hold)
@@ -275,6 +274,20 @@ def run_balance(s, c, now, hourly, leader):
     else:
         state["lastBal"] = None
     return {"hold": hold, "held": cfg["bal_held"], "mode": cfg["bal_mode"], "why": why}
+
+
+def manual_force(on, now=None):
+    """Force charge button. Turning it off by hand holds until the end of today's cheap window,
+    so the automation doesn't switch it straight back on."""
+    if state["status"] is None:
+        raise ValueError("no panel data yet")
+    now = now or datetime.now(TZ)
+    deadline = deadline_of(now, cfg)
+    with lock:
+        set_force_charge(state["status"], on)
+        cfg["charging_by_us"] = False  # manual: automation won't turn it off either
+        cfg["manual_off_until"] = 0 if on or now >= deadline else deadline.timestamp()
+        save_cfg()
 
 
 demo = None
@@ -314,11 +327,11 @@ def get_weather():
     return weather["data"]
 
 
-def tick():
+def tick(now=None):
     s, raw = fetch()
     if s["soc"] is None:  # never act on missing data (a 0% default would trigger charging)
         raise RuntimeError("battery level (backupIncreInfo.backupBatPer) missing from panel data")
-    now = datetime.now(TZ)
+    now = now or datetime.now(TZ)
     w = get_weather()
     leader = update_control(s)
     with lock:
@@ -336,10 +349,15 @@ def tick():
         c["min_soc"], c["target_why"] = target_soc(c, c["sun_after_wh"])
         pv_wh = solar_wh(now, deadline, hourly, c["pv_kw"], c["pv_pr"]) if c["pv_kw"] else 0.0
         d = decide(now, s["soc"], c, pv_wh, cfg["charging_by_us"])
+        if now.timestamp() < cfg["manual_off_until"] and d["kind"] in ("planned", "charging"):
+            d = {**d, "kind": "manual", "charge": False, "reason": "You turned grid charging off by hand; it stays off for today"}
         charge, reason, start_at = d["charge"], d["reason"], d["start_at"]
         mode = cfg["mode"]
+        # Once the cheap window is over, a copy always stops a charge it started, even on standby:
+        # no copy ever wants grid charging then, so this can't fight the copy in control.
+        own_stop = not charge and cfg["charging_by_us"] and d["kind"] == "outside"
         if mode != "off" and charge != cfg["charging_by_us"]:
-            if mode == "auto" and leader:
+            if mode == "auto" and (leader or own_stop):
                 set_force_charge(s, charge)
                 cfg["charging_by_us"] = charge
                 save_cfg()
@@ -430,21 +448,21 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
             if self.path == "/api/config":
                 with lock:
-                    to_auto = body.get("mode") == "auto" and cfg["mode"] != "auto"
+                    new = dict(cfg)  # check the whole change before applying any of it
                     for k, v in body.items():
                         if k in ("mode", "bal_mode") and v in ("off", "dry-run", "auto"):
-                            cfg[k] = v
-                        elif k in ("offpeak_start", "offpeak_end"):
-                            cfg[k] = datetime.strptime(v, "%H:%M").strftime("%H:%M")  # "8:00" -> "08:00"
+                            new[k] = v
                         elif k in NUMERIC:
                             v = float(v)
                             if (v < 0 and k not in ("lat", "lon")) or (k in ("min_soc", "min_soc_cloudy", "bal_full_soc", "bal_release_soc") and v > 100):
                                 raise ValueError(f"{k} out of range")
-                            cfg[k] = v
+                            new[k] = v
                         else:
                             raise ValueError(f"unknown or invalid setting {k}")
-                    if cfg["bal_release_soc"] >= cfg["bal_full_soc"]:
+                    if new["bal_release_soc"] >= new["bal_full_soc"]:
                         raise ValueError("DPU 2 resume level must be below its pause level")
+                    to_auto = new["mode"] == "auto" and cfg["mode"] != "auto"
+                    cfg.update(new)
                     save_cfg()
                     log(f"Settings changed: {body}")
                     if to_auto and state["status"]:  # switching to Auto takes control (latest wins)
@@ -466,16 +484,16 @@ class Handler(BaseHTTPRequestHandler):
                 with lock:
                     update_control(state["status"], force=True)
             elif self.path == "/api/force":
-                with lock:
-                    set_force_charge(state["status"], bool(body.get("on")))
-                    cfg["charging_by_us"] = False  # manual override: automation won't undo it
-                    save_cfg()
+                manual_force(bool(body.get("on")))
             else:
                 return self._json({"error": "not found"}, 404)
-            tick()
-            self._json({"ok": True})
         except Exception as e:
-            self._json({"error": str(e)}, 400)
+            return self._json({"error": str(e)}, 400)
+        try:
+            tick()  # refresh the dashboard now
+        except Exception as e:  # the change already went through; show the panel error in the banner instead
+            state["error"] = f"{type(e).__name__}: {e}"
+        self._json({"ok": True})
 
     def log_message(self, *a):
         pass
