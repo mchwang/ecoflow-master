@@ -1,0 +1,7 @@
+.env
+data/
+config.json
+__pycache__/
+.claude/
+.git/
+test_*.py
