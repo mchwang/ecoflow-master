@@ -11,13 +11,13 @@
   :root {
     --bg:#0f172a; --card:#1b2336; --card2:#222b40; --fg:#f8fafc; --mute:#94a3b8; --line:#2b3549; --input:#475569;
     --ok:#22c55e; --warn:#f59e0b; --bad:#f87171; --track:#272f42;
-    --solar:#fbbf24; --grid:#60a5fa; --home:#a78bfa; --batt:#22c55e;
+    --solar:#fbbf24; --grid:#60a5fa; --home:#a78bfa; --batt:#22c55e; --low:#ef4444;
     --btn:#22c55e; --on-btn:#0f172a; --ring:#ffffff; color-scheme:dark;
   }
   :root[data-theme="light"] {
     --bg:#f8fafc; --card:#ffffff; --card2:#f1f5f9; --fg:#0f172a; --mute:#475569; --line:#e2e8f0; --input:#cbd5e1;
     --ok:#15803d; --warn:#b45309; --bad:#b91c1c; --track:#e2e8f0;
-    --solar:#d97706; --grid:#2563eb; --home:#7c3aed; --batt:#15803d;
+    --solar:#d97706; --grid:#2563eb; --home:#7c3aed; --batt:#15803d; --low:#dc2626;
     --btn:#1e293b; --on-btn:#ffffff; --ring:#2563eb; color-scheme:light;
   }
   * { box-sizing:border-box; }
@@ -59,7 +59,7 @@
   .kpi .value { display:block; font-size:30px; font-weight:700; line-height:1.2; }
   .kpi .sub { color:var(--mute); font-size:13px; }
   .bar { height:8px; background:var(--track); border-radius:4px; overflow:hidden; margin-top:8px; }
-  .bar i { display:block; height:100%; width:0; background:linear-gradient(90deg, var(--batt), color-mix(in srgb, var(--batt) 60%, #a3e635)); border-radius:4px; transition:width .8s cubic-bezier(.2,.7,.3,1); }
+  .bar i { display:block; height:100%; width:0; --lvl:var(--batt); background:linear-gradient(90deg, var(--lvl), color-mix(in srgb, var(--lvl) 88%, #fff)); border-radius:4px; transition:width .8s cubic-bezier(.2,.7,.3,1); }
   .flash { animation:flash .9s ease-out; }
   @keyframes flash { from { color:var(--c, var(--ok)); text-shadow:0 0 14px color-mix(in srgb, var(--c, var(--ok)) 60%, transparent); } }
 
@@ -77,7 +77,7 @@
   .flow use { fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
   .flow .node { fill:var(--card2); stroke:var(--line); stroke-width:1.5; }
   .flow .hub { fill:var(--input); }
-  .flow .soc-ring { fill:none; stroke:var(--batt); stroke-width:4; stroke-linecap:round; transform:rotate(-90deg); transform-box:fill-box; transform-origin:center;
+  .flow .soc-ring { fill:none; stroke:var(--lvl, var(--batt)); transition:stroke .4s; stroke-width:4; stroke-linecap:round; transform:rotate(-90deg); transform-box:fill-box; transform-origin:center;
                     transition:stroke-dashoffset 1s cubic-bezier(.2,.7,.3,1); }
   .flow .soc-track { fill:none; stroke:var(--track); stroke-width:4; }
   .flow .glow { animation:glow 2.4s ease-in-out infinite; }
@@ -329,6 +329,8 @@ const on = v => v === true || v === 1 || /_ON$/.test(v ?? '');
 const icon = (id, cls = 'ic sm') => `<svg class="${cls}" aria-hidden="true"><use href="#i-${id}"/></svg>`;
 // "15:00" or ISO timestamp -> "3 PM" / "10:24 AM"
 const t12 = v => { if (!v) return '–'; const [h, m] = (v.length > 5 ? v.slice(11, 16) : v).split(':').map(Number); return `${h % 12 || 12}${m ? ':' + String(m).padStart(2, '0') : ''} ${h < 12 ? 'AM' : 'PM'}`; };
+// Battery level urgency: <=10% red, <=30% amber, otherwise green.
+const lvl = soc => soc <= 10 ? 'var(--low)' : soc <= 30 ? 'var(--warn)' : 'var(--batt)';
 const STALE_MS = 3 * 60 * 1000;  // server polls the panel every 60 s
 let cfgLoaded = false, last = null, fcDrawn = false;
 
@@ -367,6 +369,7 @@ function drawFlow(s, d) {
   $('batt-ic').setAttribute('href', charging ? '#i-bolt-batt' : '#i-battery');
   const C = 2 * Math.PI * 32;
   $('soc-ring').style.strokeDashoffset = (C * (1 - s.soc / 100)).toFixed(1);
+  $('soc-ring').style.setProperty('--lvl', lvl(s.soc));
 }
 
 async function refresh() {
@@ -385,6 +388,7 @@ async function refresh() {
     : `<span class="dot ok live"></span>Live · ${t12(st.updated)}`;
 
   setText('soc', s.soc + '%');
+  $('socbar').style.setProperty('--lvl', lvl(s.soc));
   requestAnimationFrame(() => { $('socbar').style.width = s.soc + '%'; });  // animate from 0 on first load
   $('socwh').textContent = s.fullCapWh ? `${((s.remainWh ?? s.soc/100*s.fullCapWh)/1000).toFixed(1)} of ${(s.fullCapWh/1000).toFixed(1)} kWh` : '';
   setText('solar', w(s.solarWatt)); setText('load', w(s.loadWatt)); setText('gridw', w(s.gridWatt));
@@ -446,7 +450,7 @@ async function refresh() {
   $('bats').innerHTML = s.batteries.map(b => `<div class="batt">
       <span class="badge" style="--c:${b.enabled === 0 ? 'var(--mute)' : 'var(--batt)'}">${icon(on(b.forceCharge) ? 'bolt-batt' : 'battery', 'ic')}</span>
       <div><div class="name">DPU ${b.n} <span class="mute" style="font-weight:400">· ${b.fullCapWh ? (b.fullCapWh/1000).toFixed(1) + ' kWh' : '–'}</span></div>
-        <div class="bar" style="margin:6px 0"><i style="width:${b.soc}%"></i></div>
+        <div class="bar" style="margin:6px 0"><i style="width:${b.soc}%;--lvl:${lvl(b.soc)}"></i></div>
         <div class="meta"><span>${icon('zap')}${w(b.watt)}</span><span>${icon('thermo')}${b.temp ?? '–'}°C</span>
           <span>${b.enabled === 0 ? 'Disabled' : on(b.forceCharge) ? '<b class="warn">Grid charging</b>' : 'Force charge off'}</span></div></div>
       <span class="pct num">${b.soc}%</span></div>`).join('') || '<span class="mute">No batteries reported</span>';
