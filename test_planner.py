@@ -54,12 +54,13 @@ class Planner(unittest.TestCase):
     def test_never_charges_in_peak_or_part_peak(self):
         for h in (15, 17, 22):
             self.assertFalse(decide(at(h), 10, CFG)["charge"])
+            self.assertEqual(decide(at(h), 10, CFG)["kind"], "outside")
 
     def test_sunny_day_no_grid(self):
         pv = solar_wh(at(6), at(15), sky(800), 8, .8)  # ~30 kWh
         d = decide(at(6), 12, CFG, pv)
         self.assertFalse(d["charge"]); self.assertGreaterEqual(d["projected_soc"], 60)
-        self.assertIn("OK", d["reason"])
+        self.assertIn("OK", d["reason"]); self.assertEqual(d["kind"], "ok")
 
     def test_cloudy_day_charges_only_the_shortfall(self):
         pv = solar_wh(at(6), at(15), sky(150), 8, .8)  # ~5 kWh -> 12% + ~16% = ~28%
@@ -69,7 +70,9 @@ class Planner(unittest.TestCase):
         missing = (60 - d["projected_soc"]) / 100 * 30720
         expect = at(15) - timedelta(minutes=missing / 3600 * 60 + 30)
         self.assertLess(abs((d["start_at"] - expect).total_seconds()), 60)
-        self.assertTrue(decide(d["start_at"] + timedelta(minutes=1), 12, CFG, pv)["charge"])
+        self.assertEqual(d["kind"], "planned")
+        later = decide(d["start_at"] + timedelta(minutes=1), 12, CFG, pv)
+        self.assertTrue(later["charge"]); self.assertEqual(later["kind"], "charging")
 
     def test_no_solar_info_charges_full_shortfall(self):
         d = decide(at(6), 12, CFG, 0)

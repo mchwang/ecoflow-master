@@ -279,7 +279,7 @@ def tick():
         forecast = [{"hour": f"{t:%H}", "cloud": cc, "ghi": round(ghi or 0), "kw": round((ghi or 0) / 1000 * c["pv_kw"] * c["pv_pr"], 2)}
                     for t, ghi, cc in (w["hourly"] if w else []) if t.date() == now.date() and (ghi or 0) > 0]
         state.update(status=s, raw=raw, error=weather["error"], updated=now.isoformat(timespec="seconds"), decision={
-            "charge": charge, "reason": reason, "startAt": start_at and start_at.strftime("%H:%M"),
+            "charge": charge, "kind": d["kind"], "reason": reason, "startAt": start_at and start_at.strftime("%H:%M"),
             "projectedSoc": d["projected_soc"], "solarKwh": round(pv_wh / 1000, 1),
             "sunrise": w and w["sunrise"], "sunset": w and w["sunset"], "forecast": forecast,
             "period": period, "season": season, "price": price, "effective": c,
