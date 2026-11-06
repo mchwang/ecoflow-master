@@ -579,7 +579,7 @@ async function refresh() {
       ok: ['On track, no grid charge needed', `${sol}, so the battery should reach ${d.projectedSoc}% by ${end}. Target is ${e.min_soc}% (${e.target_why}).`],
       planned: [`Grid charge at ${d.startAt ? t12(d.startAt) : '–'}`, `${sol}, so the battery would only reach ${d.projectedSoc}% by ${end}. It needs ${e.min_soc}% (${e.target_why}).`],
       outage: ['Grid outage: on battery', `The panel switched the house to the battery. Backup time is shown at the top; no grid charging until the grid returns.`],
-      charging: ['Grid charging now', `Charging so the battery reaches ${e.min_soc}% by ${end} (${e.target_why}). Without the grid it would reach ${d.projectedSoc}%.`],
+      charging: [d.doneAt ? `Grid charging until about ${t12(d.doneAt)}` : 'Grid charging now', `Charging so the battery reaches ${e.min_soc}% by ${end} (${e.target_why}). Without the grid it would reach ${d.projectedSoc}%.`],
     }[d.kind] || [d.charge ? 'Grid charging' : 'Not charging', d.reason];
     $('stitle').textContent = title;
     $('stitle').className = 'headline' + (d.kind === 'charging' ? ' warn' : '');

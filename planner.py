@@ -108,7 +108,8 @@ def target_soc(cfg, sun_after_wh):
 
 
 def decide(now, soc, cfg, pv_wh=0.0, charging_by_us=False, projected=None):
-    """Return dict(kind, charge, reason, start_at, projected_soc). kind: outside | ok | planned | charging.
+    """Return dict(kind, charge, reason, start_at, projected_soc, done_at). kind: outside | ok | planned | charging.
+    done_at (charging only): when the battery is expected to reach the stop level (min + 2%), at the latest the deadline.
 
     cfg keys: capacity_wh, charge_w, min_soc (% wanted at the deadline), max_soc,
               offpeak_start/offpeak_end "HH:MM" (offpeak_end = deadline), margin_min.
@@ -130,15 +131,20 @@ def decide(now, soc, cfg, pv_wh=0.0, charging_by_us=False, projected=None):
     minutes = missing_wh / (cfg["charge_w"] * 0.9) * 60 + cfg["margin_min"]  # 0.9: AC charge losses
     start_at = deadline_of(now, cfg) - timedelta(minutes=minutes)
     short = f"{solar}, only ~{projected:.0f}% by {hm12(cfg['offpeak_end'])} (min {min_soc:.0f}%)"
+    # Charging stops once projected reaches min + 2%; each grid Wh stored raises projected by the same amount.
+    stop_wh = max(0.0, min_soc + 2 - projected) / 100 * cap
+    done_at = min(deadline_of(now, cfg), now + timedelta(hours=stop_wh / (cfg["charge_w"] * 0.9)))
     if charging_by_us:
         # Re-plan while charging: if the sun now covers enough to start later, pause until then. The 20 min
         # gap keeps it from switching off and on every poll; inside the 2% buffer (missing 0) keep going.
         if missing_wh and start_at > now + timedelta(minutes=20):
             return {**out, "kind": "planned", "start_at": start_at, "reason": f"Short: {short}; grid charge paused for the sun, resumes {hm12(start_at)}"}
-        return {**out, "kind": "charging", "charge": True, "start_at": start_at, "reason": f"Charging: {solar}, ~{projected:.0f}% by {hm12(cfg['offpeak_end'])} without grid; need {min_soc:.0f}%"}
+        return {**out, "kind": "charging", "charge": True, "start_at": start_at, "done_at": done_at,
+                "reason": f"Charging: {solar}, ~{projected:.0f}% by {hm12(cfg['offpeak_end'])} without grid; need {min_soc:.0f}%; done ~{hm12(done_at)}"}
 
     if now >= start_at:
-        return {**out, "kind": "charging", "charge": True, "start_at": start_at, "reason": f"Short: {short}; grid charging now"}
+        return {**out, "kind": "charging", "charge": True, "start_at": start_at, "done_at": done_at,
+                "reason": f"Short: {short}; grid charging now, done ~{hm12(done_at)}"}
     return {**out, "kind": "planned", "start_at": start_at, "reason": f"Short: {short}; grid charge starts {hm12(start_at)}"}
 
 
