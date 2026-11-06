@@ -736,8 +736,9 @@ function renderDay(r) {
   $('sv-day').innerHTML = [
     [`Cost without the system`, m(rep.cost_without), 'house all from grid at PG&E prices'],
     ['Actual grid cost', m(rep.grid_cost), 'what the grid really billed'],
-    [isToday ? 'Saved today' : 'Saved that day', m(rep.saved), `${kwh(rep.home_kwh)} used at home`],
-    ['This month', sv ? m(sv.total) : '–', sv ? `${m(sv.monthWithout)} → ${m(sv.monthGrid)}` : ''],
+    ['Battery change', m(rep.battery_value ?? 0), `${kwh((rep.stored_kwh || 0) - (rep.drawn_kwh || 0))} at the off-peak price`],
+    [isToday ? 'Saved today' : 'Saved that day', m(rep.saved), 'cost without − grid cost + battery change'],
+    ['This month', sv ? m(sv.total) : '–', sv ? `${m(sv.monthWithout)} → ${m(sv.monthGrid)} grid, plus battery change` : ''],
     ['All time', sv ? m(sv.allTime) : '–', sv ? `${sv.days} day${sv.days === 1 ? '' : 's'} since ${sv.since}` : ''],
     ['Est. per year', sv?.annual != null ? m(sv.annual) : '–', sv?.annual != null ? 'from the daily average so far' : 'after a week of history'],
   ].map(([k, v, sub]) => `<div class="fact"><div><span class="label">${k}</span><b class="num">${v}</b><span class="mute" style="font-size:13px">${sub}</span></div></div>`).join('');
