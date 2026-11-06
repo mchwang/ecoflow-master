@@ -83,6 +83,8 @@ DEFAULTS = {
     "bal_held": False,           # we paused DPU 2 (persisted, so we only ever resume what we paused)
     # Discharge control: the panel never runs the house from the battery below its backup reserve, so raising
     # the reserve to the current level holds the battery; setting it back to the outage floor releases it.
+    "hold_mode": "dry-run",      # off | dry-run | auto: holding by reserve = level made the panel grid-charge at
+                                 # 4 kW (it tops up to the reserve), so it stays log-only until a safe method is verified
     "outage_reserve_soc": 20,    # % always kept for outages (the reserve when the battery is released)
     "reserve_held": None,        # reserve % we set to hold the battery (persisted, so we always release it)
 }
@@ -308,7 +310,7 @@ def run_reserve(s, hold, why, leader):
     Only the copy in control on Auto sends; any other copy releases a hold it left behind."""
     floor, held = cfg["outage_reserve_soc"], cfg["reserve_held"]
     want = max(floor, round(s["soc"])) if hold else None
-    if cfg["mode"] == "auto" and leader:
+    if cfg["mode"] == "auto" and cfg["hold_mode"] == "auto" and leader:
         if want is None and held is not None:
             set_reserve(s, floor); log(f"Battery released (reserve {floor:.0f}%): {why}")
         elif want is not None and (held is None or want >= held + 2):
@@ -321,8 +323,9 @@ def run_reserve(s, hold, why, leader):
         set_reserve(s, floor); log(f"Battery released (reserve {floor:.0f}%): this copy isn't controlling the panel now")
         cfg["reserve_held"] = None
         save_cfg()
-    elif cfg["mode"] != "off":
-        msg = f"[{'standby' if cfg['mode'] == 'auto' else 'dry-run'}] would {'hold the battery' if hold else 'let the battery run the house'}"
+    elif cfg["mode"] != "off" and cfg["hold_mode"] != "off":
+        tag = "standby" if cfg["mode"] == "auto" and cfg["hold_mode"] == "auto" else "dry-run"
+        msg = f"[{tag}] would {'hold the battery' if hold else 'let the battery run the house'}"
         if state.get("lastHold") != msg:
             log(f"{msg}: {why}")
         state["lastHold"] = msg
@@ -480,7 +483,8 @@ def tick(now=None):
         period, season, price = tou_period(now)
         held_sim = simulate(now, deadline, s["soc"], hourly, profile, fallback_kw, {}, 0, c["capacity_wh"], floor, c["max_soc"])
         hold, hold_why = hold_battery(period, bool(s["gridOnline"]), held_sim["wasted_wh"] / 1000, cfg["reserve_held"] is not None)
-        sim = held_sim if hold else simulate(now, deadline, s["soc"], *model)  # held: house on grid until 3 PM
+        held_now = hold and cfg["hold_mode"] == "auto"  # only plan on a hold we actually send
+        sim = held_sim if held_now else simulate(now, deadline, s["soc"], *model)  # held: house on grid until 3 PM
         c["load_hours"] = len(loads)
         d = decide(now, s["soc"], c, pv_wh, cfg["charging_by_us"], projected=round(sim["soc"], 1))
         if s["gridOnline"] == 0:  # outage: the panel runs the house from the battery; there's nothing to charge from
@@ -517,7 +521,7 @@ def tick(now=None):
             "homeKwh": round(sim["home_wh"] / 1000, 1), "wastedKwh": round(sim["wasted_wh"] / 1000, 1),
             "sunrise": w and w["sunrise"], "sunset": w and w["sunset"], "forecast": forecast,
             "period": period, "season": season, "price": price, "effective": c,
-            "battery": {"hold": hold, "why": hold_why, "reserve": cfg["reserve_held"], "floor": floor},
+            "battery": {"hold": hold, "why": hold_why, "reserve": cfg["reserve_held"], "floor": floor, "mode": cfg["hold_mode"]},
         }, savings=saved, balance=bal, control={"instance": INSTANCE, "holder": state.get("holder"), "leader": leader,
                     "referee": LEADER_URL or "this copy", "error": state.get("leaseError")})
 
@@ -662,7 +666,7 @@ class Handler(BaseHTTPRequestHandler):
                 with lock:
                     new = dict(cfg)  # check the whole change before applying any of it
                     for k, v in body.items():
-                        if k in ("mode", "bal_mode") and v in ("off", "dry-run", "auto"):
+                        if k in ("mode", "bal_mode", "hold_mode") and v in ("off", "dry-run", "auto"):
                             new[k] = v
                         elif k in NUMERIC:
                             v = float(v)

@@ -407,6 +407,8 @@
           <select name="bal_mode"><option value="off">Off</option><option value="dry-run">Dry-run (log only)</option><option value="auto">Auto</option></select></label>
         <label class="field">Pause DPU 2 when DPU 1 ≥ %<input name="bal_full_soc" type="number" min="10" max="100"></label>
         <label class="field">Resume DPU 2 when DPU 1 ≤ %<input name="bal_release_soc" type="number" min="0" max="100"></label>
+        <label class="field">Battery hold (discharge control)<small>Holds the battery off-peak via the panel's reserve. Dry-run: logs only</small>
+          <select name="hold_mode"><option value="off">Off</option><option value="dry-run">Dry-run (log only)</option><option value="auto">Auto</option></select></label>
         <label class="field">Outage reserve %<small>Always kept for outages; the battery is never used below this</small><input name="outage_reserve_soc" type="number" min="0" max="100" step="1"></label>
         <label class="field">Resume when DPU 1 solar left today &lt; Wh<small>Used once DPU 1's own solar is learned</small><input name="bal_dpu1_left_wh" type="number" min="0" step="100"></label>
         <label class="field">Battery capacity Wh<small>0 = read from panel</small><input name="capacity_wh" type="number" min="0"></label>
@@ -579,7 +581,7 @@ async function refresh() {
     $('stitle').className = 'headline' + (d.kind === 'charging' ? ' warn' : '');
     $('sreason').textContent = why;
     const bt = d.battery;
-    $('sbatt').innerHTML = bt ? `${icon(bt.hold ? 'shield' : 'battery')}<b>Battery ${bt.hold ? 'held' : 'free to run the house'}</b>${bt.reserve != null ? ` (reserve ${bt.reserve}%)` : ''}: ${esc(bt.why)}` : '';
+    $('sbatt').innerHTML = bt ? `${icon(bt.hold ? 'shield' : 'battery')}<b>Battery ${bt.hold ? (bt.mode === 'auto' ? 'held' : 'would be held') : 'free to run the house'}</b>${bt.reserve != null ? ` (reserve ${bt.reserve}%)` : ''}: ${esc(bt.why)}${bt.mode !== 'auto' ? ` <span class="mute">(battery hold: ${bt.mode})</span>` : ''}` : '';
     const standby = st.config.mode === 'auto' && st.control && !st.control.leader;
     const acts = d.kind === 'planned' || d.kind === 'charging';
     $('smode').hidden = !acts && st.config.mode === 'auto' && !standby;
