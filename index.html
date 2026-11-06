@@ -310,6 +310,7 @@
           <select name="bal_mode"><option value="off">Off</option><option value="dry-run">Dry-run (log only)</option><option value="auto">Auto</option></select></label>
         <label class="field">Pause DPU 2 when DPU 1 ≥ %<input name="bal_full_soc" type="number" min="10" max="100"></label>
         <label class="field">Resume DPU 2 when DPU 1 ≤ %<input name="bal_release_soc" type="number" min="0" max="100"></label>
+        <label class="field">Resume when DPU 1 solar left today &lt; Wh<small>Used once DPU 1's own solar is learned</small><input name="bal_dpu1_left_wh" type="number" min="0" step="100"></label>
         <label class="field">Battery capacity Wh<small>0 = read from panel</small><input name="capacity_wh" type="number" min="0"></label>
         <label class="field">Charge power W<small>0 = panel's AC charge setting</small><input name="charge_w" type="number" min="0"></label>
         <label class="field">Safety margin, minutes<input name="margin_min" type="number" min="0"></label>
@@ -471,7 +472,7 @@ async function refresh() {
       <span class="badge" style="--c:${b.enabled === 0 ? 'var(--mute)' : 'var(--batt)'}">${icon(on(b.forceCharge) ? 'bolt-batt' : 'battery', 'ic')}</span>
       <div><div class="name">DPU ${b.n} <span class="mute" style="font-weight:400">· ${b.fullCapWh ? (b.fullCapWh/1000).toFixed(1) + ' kWh' : '–'}</span></div>
         <div class="bar" style="margin:6px 0"><i style="width:${b.soc}%;--lvl:${lvl(b.soc)}"></i></div>
-        <div class="meta"><span>${icon('zap')}${w(b.watt)}</span><span>${icon('thermo')}${b.temp ?? '–'}°C</span>
+        <div class="meta"><span title="Solar into DPU ${b.n} now · today">${icon('sun')}${w(b.solarWatt)} · ${(st.savings?.solarToday?.[b.n - 1] ?? 0).toFixed(1)} kWh today</span><span>${icon('zap')}${w(b.watt)}</span><span>${icon('thermo')}${b.temp ?? '–'}°C</span>
           <span>${b.enabled === 0 ? 'Disabled' : on(b.forceCharge) ? '<b class="warn">Grid charging</b>' : 'Force charge off'}</span></div></div>
       <span class="pct num">${b.soc}%</span></div>`).join('') || '<span class="mute">No batteries reported</span>';
 

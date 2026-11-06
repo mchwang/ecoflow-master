@@ -33,11 +33,33 @@ class Store(unittest.TestCase):
 class DailySavings(unittest.TestCase):
     def test_upsert_keeps_history(self):
         d = DB(Path(TMP) / "t4.db")
-        d.save_daily_savings({"2026-10-31": [1.5, 6.0]}, 1)
-        d.save_daily_savings({"2026-11-01": [0.2, 1.0]}, 2)
-        d.save_daily_savings({"2026-11-01": [0.5, 2.0]}, 3)  # same day recomputed: replaced, not added
-        self.assertEqual(d.daily_savings(), [("2026-10-31", 1.5, 6.0), ("2026-11-01", 0.5, 2.0)])
-        self.assertEqual(d.daily_savings("2026-11-01"), [("2026-11-01", 0.5, 2.0)])
+        d.save_daily_savings({"2026-10-31": [1.5, 6.0]}, 1)                  # no solar split: stored as 0
+        d.save_daily_savings({"2026-11-01": [0.2, 1.0, 1.0, 2.0]}, 2)
+        d.save_daily_savings({"2026-11-01": [0.5, 2.0, 3.0, 4.0]}, 3)        # same day recomputed: replaced, not added
+        self.assertEqual(d.daily_savings(), [("2026-10-31", 1.5, 6.0, 0.0, 0.0), ("2026-11-01", 0.5, 2.0, 3.0, 4.0)])
+        self.assertEqual(d.daily_savings("2026-11-01"), [("2026-11-01", 0.5, 2.0, 3.0, 4.0)])
+
+
+class PerDpuAndWeather(unittest.TestCase):
+    def test_upgrades_an_existing_database(self):
+        import sqlite3
+        path = Path(TMP) / "old.db"
+        c = sqlite3.connect(path)  # schema as first released, with one old row
+        c.executescript("CREATE TABLE readings (ts INTEGER PRIMARY KEY, soc REAL, solar_w REAL, load_w REAL, grid_w REAL,"
+                        " forecast_ghi REAL, charging INTEGER); INSERT INTO readings VALUES (100, 50, 300, 700, 700, 400, 0);"
+                        "CREATE TABLE daily_savings (day TEXT PRIMARY KEY, saved REAL NOT NULL, kwh REAL NOT NULL, updated INTEGER NOT NULL);")
+        c.commit(); c.close()
+        d = DB(path)
+        d.add_reading(200, 51, 500, 700, 200, 450, 0, 120, 380, 52, 49)
+        self.assertEqual(d.readings_since(0), [(100, 50, 700, 700, 300, None, None), (200, 51, 700, 200, 500, 120, 380)])
+
+    def test_learning_uses_stored_weather_then_forecast(self):
+        d = DB(Path(TMP) / "t5.db")
+        d.add_reading(3600 * 10 + 60, 50, 500, 0, 0, 400, 0, 200, 300, 50, 50)    # hour ending 11*3600
+        d.add_reading(3600 * 11 + 60, 50, 500, 0, 0, 450, 0, 210, 290, 50, 50)    # hour ending 12*3600: no weather row
+        d.save_weather([(3600 * 11, 520, 400, 120, 10, 18)], now=1)
+        rows = d.dpu_samples(0)
+        self.assertEqual([r[5] for r in rows], [520, 450])                       # stored estimate, else forecast
 
 
 class Lease(unittest.TestCase):

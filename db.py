@@ -1,4 +1,4 @@
-"""SQLite history store: one row per poll (readings) plus the activity log (events).
+"""SQLite history store: readings (one per poll), events (activity log), daily_savings, weather_hourly, lease.
 
 Timestamps are unix seconds (UTC), so ranges sort correctly across daylight-saving changes.
 """
@@ -23,6 +23,14 @@ CREATE TABLE IF NOT EXISTS daily_savings (   -- grid cost avoided per local day 
     kwh REAL NOT NULL,           -- energy the system delivered to the house
     updated INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS weather_hourly (   -- Open-Meteo, one row per hour; past hours hold the after-the-fact estimate
+    hour_end INTEGER PRIMARY KEY, -- unix seconds at the end of the hour the values cover
+    ghi REAL,                     -- total sunlight on flat ground, W/m2 (mean over the hour)
+    direct REAL, diffuse REAL,    -- its direct-beam and diffuse (sky) parts, W/m2
+    cloud REAL,                   -- cloud cover %
+    temp REAL,                    -- air temperature C (hot panels make less power)
+    fetched INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS lease (   -- which copy of the app may send automatic commands (one row)
     id INTEGER PRIMARY KEY CHECK (id = 1),
     holder TEXT NOT NULL,
@@ -38,14 +46,39 @@ class DB:
         with self.lock:
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.executescript(SCHEMA)
+            # Columns added after the first release: add them to existing databases (old rows keep NULL).
+            for table, cols in {"readings": ["solar1_w REAL", "solar2_w REAL", "soc1 REAL", "soc2 REAL"],
+                                "daily_savings": ["solar1_kwh REAL", "solar2_kwh REAL"]}.items():
+                have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+                for col in cols:
+                    if col.split()[0] not in have:
+                        self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
+            self.conn.commit()
 
     def _write(self, sql, args):
         with self.lock, self.conn:  # `with conn` commits, or rolls back on error
             self.conn.execute(sql, args)
 
-    def add_reading(self, ts, soc, solar_w, load_w, grid_w, forecast_ghi, charging):
-        self._write("INSERT OR REPLACE INTO readings VALUES (?,?,?,?,?,?,?)",
-                    (int(ts), soc, solar_w, load_w, grid_w, forecast_ghi, int(bool(charging))))
+    def add_reading(self, ts, soc, solar_w, load_w, grid_w, forecast_ghi, charging,
+                    solar1_w=None, solar2_w=None, soc1=None, soc2=None):
+        self._write("INSERT OR REPLACE INTO readings (ts, soc, solar_w, load_w, grid_w, forecast_ghi, charging,"
+                    " solar1_w, solar2_w, soc1, soc2) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (int(ts), soc, solar_w, load_w, grid_w, forecast_ghi, int(bool(charging)), solar1_w, solar2_w, soc1, soc2))
+
+    def save_weather(self, rows, now):
+        """rows: [(hour_end_ts, ghi, direct, diffuse, cloud, temp)]; newer fetches replace older ones."""
+        with self.lock, self.conn:
+            self.conn.executemany("INSERT OR REPLACE INTO weather_hourly VALUES (?,?,?,?,?,?,?)",
+                                  [(int(r[0]), *r[1:], int(now)) for r in rows])
+
+    def dpu_samples(self, since_ts):
+        """[(ts, solar1_w, solar2_w, soc1, soc2, ghi)]: per-DPU solar matched to that hour's stored weather
+        (falls back to the forecast captured with the reading)."""
+        with self.lock:
+            return self.conn.execute(
+                "SELECT r.ts, r.solar1_w, r.solar2_w, r.soc1, r.soc2, COALESCE(w.ghi, r.forecast_ghi) FROM readings r"
+                " LEFT JOIN weather_hourly w ON w.hour_end = r.ts - (r.ts % 3600) + 3600"
+                " WHERE r.ts >= ? AND (r.solar1_w IS NOT NULL OR r.solar2_w IS NOT NULL)", (int(since_ts),)).fetchall()
 
     def solar_samples(self, since_ts):
         """[(solar_w, forecast_ghi, soc)] for daylight readings since `since_ts`."""
@@ -82,18 +115,21 @@ class DB:
         return row[0] if row and row[1] >= now - ttl else None
 
     def readings_since(self, since_ts):
-        """[(ts, soc, load_w, grid_w, solar_w)] oldest first."""
+        """[(ts, soc, load_w, grid_w, solar_w, solar1_w, solar2_w)] oldest first."""
         with self.lock:
-            return self.conn.execute(
-                "SELECT ts, soc, load_w, grid_w, solar_w FROM readings WHERE ts >= ? ORDER BY ts", (int(since_ts),)).fetchall()
+            return self.conn.execute("SELECT ts, soc, load_w, grid_w, solar_w, solar1_w, solar2_w FROM readings"
+                                     " WHERE ts >= ? ORDER BY ts", (int(since_ts),)).fetchall()
 
     def save_daily_savings(self, by_day, now):
+        """by_day: {day: [saved, kwh, solar1_kwh, solar2_kwh]} (solar values optional)."""
         with self.lock, self.conn:
-            self.conn.executemany("INSERT OR REPLACE INTO daily_savings VALUES (?, ?, ?, ?)",
-                                  [(d, round(v[0], 4), round(v[1], 4), int(now)) for d, v in by_day.items()])
+            self.conn.executemany(
+                "INSERT OR REPLACE INTO daily_savings (day, saved, kwh, updated, solar1_kwh, solar2_kwh) VALUES (?,?,?,?,?,?)",
+                [(d, round(v[0], 4), round(v[1], 4), int(now), *(round(x, 4) for x in (list(v[2:4]) + [0, 0])[:2]))
+                 for d, v in by_day.items()])
 
     def daily_savings(self, since_day="0000-00-00"):
-        """[(day, saved, kwh)] oldest first."""
+        """[(day, saved, kwh, solar1_kwh, solar2_kwh)] oldest first."""
         with self.lock:
-            return self.conn.execute("SELECT day, saved, kwh FROM daily_savings WHERE day >= ? ORDER BY day",
-                                     (since_day,)).fetchall()
+            return self.conn.execute("SELECT day, saved, kwh, solar1_kwh, solar2_kwh FROM daily_savings"
+                                     " WHERE day >= ? ORDER BY day", (since_day,)).fetchall()

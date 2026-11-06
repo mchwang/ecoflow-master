@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from ecoflow_api import sign
-from planner import ROUND_TRIP, afternoon_sun, balance, decide, target_soc, fit_array_kw, hm12, savings, solar_wh, tou_period
+from planner import ROUND_TRIP, afternoon_sun, balance, daily_solar_kwh, decide, fit_hourly_kw, solar_wh_hourly, target_soc, fit_array_kw, hm12, savings, solar_wh, tou_period
 
 TZ = ZoneInfo("America/Los_Angeles")
 CFG = {"capacity_wh": 30720, "charge_w": 4000, "min_soc": 60, "max_soc": 95,
@@ -66,11 +66,30 @@ class AfternoonSun(unittest.TestCase):
         self.assertIn("little sun after 3 PM", target_soc(self.C, 120)[1])
 
 
+class PerDpuSolar(unittest.TestCase):
+    def test_learns_which_way_each_array_faces(self):
+        # a morning-facing array: strong at 9 AM, weak at 3 PM for the same sunlight
+        samples = [(9, 3000, 500, 50)] * 20 + [(15, 500, 500, 50)] * 20 + [(12, 2000, 500, 50)] * 5
+        p = fit_hourly_kw(samples, max_soc=95)
+        self.assertEqual(p, {9: 6.0, 15: 1.0})                      # 12 PM: too few readings yet
+        self.assertEqual(fit_hourly_kw([(9, 3000, 500, 95)] * 20, 95), {})  # battery full: throttled, ignored
+
+    def test_forecast_uses_profile_then_fallback(self):
+        hourly = [(at(10), 500), (at(16), 500)]                     # 9-10 AM and 3-4 PM at 500 W/m2
+        self.assertAlmostEqual(solar_wh_hourly(at(0), at(23), hourly, {9: 6.0}, 2.0), 500 * 6 + 500 * 2)
+
+    def test_daily_kwh_per_dpu(self):
+        rows = [(at(9), 1000, 3000), (at(9, 1), 1000, 3000), (at(9, 2), 0, 0), (at(12), 500, 500)]  # gap before noon
+        r = daily_solar_kwh(rows)
+        self.assertAlmostEqual(r["2026-11-06"][0], 2 * 1000 / 60 / 1000)
+        self.assertAlmostEqual(r["2026-11-06"][1], 2 * 3000 / 60 / 1000)
+
+
 class Balance(unittest.TestCase):
     C = {"bal_full_soc": 90, "bal_release_soc": 75, "bal_sun_left_wh": 100}
 
     def b(self, d1, held=False, grid=True, charging=False, sun=1000):
-        return balance(d1, grid, charging, sun, held, self.C)[0]
+        return balance(d1, grid, charging, sun, self.C['bal_sun_left_wh'], held, self.C)[0]
 
     def test_pause_when_dpu1_nearly_full_and_hold_until_release(self):
         self.assertFalse(self.b(85))
