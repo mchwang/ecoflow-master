@@ -51,6 +51,43 @@ def solar_wh_hourly(now, until, hourly, kw_by_hour, fallback_kw):
     return total
 
 
+def _hours(now, until, hourly, kw_by_hour, fallback_kw, load_by_hour, load_now):
+    """Yield (solar_wh, home_wh) for each clock-hour slice of [now, until)."""
+    ghi = {end - timedelta(hours=1): g for end, g in hourly}
+    t = now
+    while t < until:
+        start = t.replace(minute=0, second=0, microsecond=0)
+        nxt = min(start + timedelta(hours=1), until)
+        h = (nxt - t).total_seconds() / 3600
+        yield (ghi.get(start, 0) or 0) * kw_by_hour.get(start.hour, fallback_kw) * h, load_by_hour.get(start.hour, load_now) * h
+        t = nxt
+
+
+def simulate(now, until, soc, hourly, kw_by_hour, fallback_kw, load_by_hour, load_now, cap, floor_soc, max_soc):
+    """Battery level at `until` with the house running from it: each hour solar goes in and the home load
+    comes out. Below the panel's reserve (floor_soc) the grid powers the house; solar above max_soc is wasted.
+    Returns dict(soc, solar_wh, home_wh, wasted_wh)."""
+    level, lo, hi = soc / 100 * cap, floor_soc / 100 * cap, max_soc / 100 * cap
+    solar = home = wasted = 0.0
+    for s, l in _hours(now, until, hourly, kw_by_hour, fallback_kw, load_by_hour, load_now):
+        solar += s; home += l
+        level = max(min(level, lo), level + s - l)  # the house never pulls it below the reserve
+        if level > hi:
+            wasted += level - hi; level = hi
+    return {"soc": level / cap * 100, "solar_wh": solar, "home_wh": home, "wasted_wh": wasted}
+
+
+def room_target(target, deadline, hourly, kw_by_hour, fallback_kw, load_by_hour, load_now, cap, floor_soc, max_soc):
+    """Lower the deadline target so the sun after it (beyond what the house uses) fits under max_soc.
+    Returns (target, room %): room is the largest build-up of surplus solar between the deadline and midnight."""
+    run = peak = 0.0
+    for s, l in _hours(deadline, deadline.replace(hour=23, minute=59), hourly, kw_by_hour, fallback_kw, load_by_hour, load_now):
+        run = max(0.0, run + s - l)  # a drained battery can't go below empty, so restart the build-up
+        peak = max(peak, run)
+    room = peak / cap * 100
+    return max(floor_soc, min(target, max_soc - room)), room
+
+
 def afternoon_sun(now, cfg, hourly):
     """Forecast sunlight (Wh/m2) from today's deadline to the end of the day; None without a forecast."""
     if not hourly:
@@ -70,15 +107,16 @@ def target_soc(cfg, sun_after_wh):
     return min(want, cfg["max_soc"]), why
 
 
-def decide(now, soc, cfg, pv_wh=0.0, charging_by_us=False):
+def decide(now, soc, cfg, pv_wh=0.0, charging_by_us=False, projected=None):
     """Return dict(kind, charge, reason, start_at, projected_soc). kind: outside | ok | planned | charging.
 
     cfg keys: capacity_wh, charge_w, min_soc (% wanted at the deadline), max_soc,
               offpeak_start/offpeak_end "HH:MM" (offpeak_end = deadline), margin_min.
-    Assumes the house runs from grid (not battery) before the deadline, so only solar and grid move the level.
+    projected: level expected at the deadline without grid charging (see simulate, which counts the house
+    running from the battery). Without it, assumes all solar goes into the battery.
     """
     cap, min_soc = cfg["capacity_wh"], cfg["min_soc"]
-    projected = min(cfg["max_soc"], soc + pv_wh / cap * 100)
+    projected = min(cfg["max_soc"], soc + pv_wh / cap * 100) if projected is None else projected
     out = {"charge": False, "start_at": None, "projected_soc": round(projected, 1)}
     if not (time.fromisoformat(cfg["offpeak_start"]) <= now.time() < time.fromisoformat(cfg["offpeak_end"])):
         return {**out, "kind": "outside", "reason": f"Outside off-peak window ({hm12(cfg['offpeak_start'])}-{hm12(cfg['offpeak_end'])}); never grid-charge at high price"}

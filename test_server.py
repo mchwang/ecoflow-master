@@ -175,7 +175,8 @@ class SignIn(HttpServer):
             self.assertIn(flag, cookie)
         session = cookie.split(";")[0]
         self.assertEqual(self.req("GET", "/api/state", headers={"Cookie": session})[0], 200)
-        self.assertEqual(self.req("GET", "/api/state", headers={"Cookie": session[:-1] + "0"})[0], 401)  # tampered
+        tampered = session[:-1] + ("1" if session[-1] == "0" else "0")  # always differs from the real signature
+        self.assertEqual(self.req("GET", "/api/state", headers={"Cookie": tampered})[0], 401)
 
     def test_expired_or_old_password_session_rejected(self):
         old = "hp_session=" + server.make_session(now=time.time() - 400 * 86400)
