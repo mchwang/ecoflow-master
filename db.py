@@ -17,6 +17,11 @@ CREATE TABLE IF NOT EXISTS events (
     ts INTEGER NOT NULL,
     msg TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS lease (   -- which copy of the app may send automatic commands (one row)
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    holder TEXT NOT NULL,
+    renewed INTEGER NOT NULL
+);
 """
 
 
@@ -50,3 +55,16 @@ class DB:
         """[(ts, msg)] newest first."""
         with self.lock:
             return self.conn.execute("SELECT ts, msg FROM events ORDER BY id DESC LIMIT ?", (n,)).fetchall()
+
+    def claim_lease(self, holder, now, ttl, force=False):
+        """Claim, renew or check control. Returns the holder after this call.
+
+        force=True takes control unconditionally (latest claim wins). Otherwise the caller
+        gets it only if it already holds it or the current holder stopped renewing for `ttl` s.
+        """
+        with self.lock, self.conn:
+            row = self.conn.execute("SELECT holder, renewed FROM lease WHERE id = 1").fetchone()
+            if force or row is None or row[0] == holder or row[1] < now - ttl:
+                self.conn.execute("INSERT OR REPLACE INTO lease VALUES (1, ?, ?)", (holder, int(now)))
+                return holder
+            return row[0]

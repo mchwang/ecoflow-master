@@ -43,6 +43,24 @@ The solar learning reads the last 14 days of `readings`. Growth is about 0.5M ro
 6. Run **one** replica only: SQLite and the charge controller both assume a single instance.
 7. A new deployment starts in **Dry-run** with empty settings. Re-enter the location (and array kW if known), then switch to Auto.
 
-**Never run two copies on Auto against the same panel.** Before switching the VPS to Auto, set your local copy to Off or stop it.
+### Running more than one copy (control lease)
+
+Only the copy holding the **control lease** sends automatic charge commands. Every other copy runs on standby: it shows everything and logs what it would do.
+
+- **Latest start wins:** a copy claims control when it starts, or when you click **Take control** on its dashboard.
+- **Renewal and failover:** the holder renews every minute. If it goes quiet for 5 minutes (laptop asleep), a standby copy takes over.
+- **Handover:** a copy that takes over adopts the panel's current force-charge state, so it can turn off a charge another copy started.
+- **The referee:** one copy (the VPS) stores the lease. Other copies must point at it:
+
+| Where | Variable | Value |
+|---|---|---|
+| VPS (Coolify) | `INSTANCE_NAME` | `vps` |
+| Laptop `.env` | `INSTANCE_NAME` | `laptop` |
+| Laptop `.env` | `LEADER_URL` | `https://<your VPS domain>` |
+| Laptop `.env` | `LEADER_PASSWORD` | the VPS `DASHBOARD_PASSWORD` (`LEADER_USER` defaults to `admin`) |
+
+A copy that can't reach the referee stays on standby: it never acts on a lease it can't confirm.
+
+**Caution:** a copy *without* `LEADER_URL` acts as its own referee. Two copies without it will **both** take control. Only the VPS should leave `LEADER_URL` unset.
 
 **Backups:** use Coolify's volume backup, or run `sqlite3 /data/homepower.db ".backup /data/backup.db"` inside the container.

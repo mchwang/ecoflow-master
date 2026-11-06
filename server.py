@@ -9,6 +9,7 @@ import base64
 import hmac
 import json
 import os
+import socket
 import threading
 import time
 import traceback
@@ -43,6 +44,14 @@ db = DB(DATA_DIR / "homepower.db")
 HOST = os.environ.get("HOST", "127.0.0.1")
 USER = os.environ.get("DASHBOARD_USER", "admin")
 PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
+# Control lease: only the copy holding it sends automatic commands. The referee copy (no LEADER_URL,
+# normally the VPS) stores the lease; other copies ask it over HTTP. Latest start / "Take control" wins;
+# if the holder stops renewing for LEASE_TTL s, a standby copy takes over.
+INSTANCE = os.environ.get("INSTANCE_NAME") or socket.gethostname()
+LEADER_URL = os.environ.get("LEADER_URL", "").rstrip("/")
+LEADER_AUTH = "Basic " + base64.b64encode(
+    f"{os.environ.get('LEADER_USER', 'admin')}:{os.environ.get('LEADER_PASSWORD', '')}".encode()).decode()
+LEASE_TTL = 300
 
 DEFAULTS = {
     "mode": "dry-run",           # off | dry-run | auto
@@ -65,6 +74,37 @@ lock = threading.Lock()
 state = {"status": None, "decision": None, "error": None, "updated": None,
          "log": deque((f"{datetime.fromtimestamp(t, TZ):%m-%d %H:%M} {m}" for t, m in db.recent_events()), maxlen=50)}
 weather = {"at": 0, "key": None, "data": None, "error": None}
+
+
+def lease(force=False):
+    """Claim/renew control. Returns the holder's name, or None if the referee is unreachable (= standby)."""
+    if not LEADER_URL:
+        return db.claim_lease(INSTANCE, time.time(), LEASE_TTL, force)
+    req = urllib.request.Request(LEADER_URL + "/api/lease", method="POST",
+                                 data=json.dumps({"holder": INSTANCE, "force": force}).encode(),
+                                 headers={"Content-Type": "application/json", "Authorization": LEADER_AUTH})
+    try:
+        with urllib.request.urlopen(req, timeout=10, context=SSL_CTX) as r:
+            return json.load(r)["holder"]
+    except Exception as e:  # can't confirm control -> never act (fail safe)
+        state["leaseError"] = f"Can't reach control referee {LEADER_URL}: {type(e).__name__}: {e}"
+        return None
+
+
+def update_control(s, force=False):
+    holder = lease(force)
+    leader = holder == INSTANCE
+    if holder is not None:
+        state["leaseError"] = None
+    if leader and not state.get("leader"):
+        # Adopt the panel's current force-charge state, so we can turn off a charge the previous controller started.
+        cfg["charging_by_us"] = any(b["forceCharge"] == "FORCE_CHARGE_ON" for b in s["batteries"] if b["enabled"] != 0)
+        save_cfg()
+        log(f"{INSTANCE} is now in control")
+    elif not leader and state.get("leader", True):
+        log(f"{INSTANCE} on standby: {holder or 'control referee unreachable'} is in control")
+    state.update(leader=leader, holder=holder)
+    return leader
 
 
 def learned_kw(now, max_soc):
@@ -207,6 +247,7 @@ def tick():
         raise RuntimeError("battery level (backupIncreInfo.backupBatPer) missing from panel data")
     now = datetime.now(TZ)
     w = get_weather()
+    leader = update_control(s)
     with lock:
         c = effective(s)
         deadline = deadline_of(now, c)
@@ -223,12 +264,17 @@ def tick():
         charge, reason, start_at = d["charge"], d["reason"], d["start_at"]
         mode = cfg["mode"]
         if mode != "off" and charge != cfg["charging_by_us"]:
-            if mode == "auto":
+            if mode == "auto" and leader:
                 set_force_charge(s, charge)
                 cfg["charging_by_us"] = charge
                 save_cfg()
             else:
-                log(f"[dry-run] would turn force charge {'ON' if charge else 'OFF'}: {reason}")
+                msg = f"[{'standby' if mode == 'auto' else 'dry-run'}] would turn force charge {'ON' if charge else 'OFF'}"
+                if state.get("lastWould") != msg:  # log once per change, not every minute
+                    log(f"{msg}: {reason}")
+                state["lastWould"] = msg
+        else:
+            state["lastWould"] = None
         period, season, price = tou_period(now)
         forecast = [{"hour": f"{t:%H}", "cloud": cc, "ghi": round(ghi or 0), "kw": round((ghi or 0) / 1000 * c["pv_kw"] * c["pv_pr"], 2)}
                     for t, ghi, cc in (w["hourly"] if w else []) if t.date() == now.date() and (ghi or 0) > 0]
@@ -237,7 +283,8 @@ def tick():
             "projectedSoc": d["projected_soc"], "solarKwh": round(pv_wh / 1000, 1),
             "sunrise": w and w["sunrise"], "sunset": w and w["sunset"], "forecast": forecast,
             "period": period, "season": season, "price": price, "effective": c,
-        })
+        }, control={"instance": INSTANCE, "holder": state.get("holder"), "leader": leader,
+                    "referee": LEADER_URL or "this copy", "error": state.get("leaseError")})
 
 
 def loop():
@@ -317,6 +364,18 @@ class Handler(BaseHTTPRequestHandler):
                             raise ValueError(f"unknown or invalid setting {k}")
                     save_cfg()
                     log(f"Settings changed: {body}")
+            elif self.path == "/api/lease":  # other copies ask this referee for control
+                if LEADER_URL:
+                    raise ValueError("this copy is not the control referee")
+                holder = str(body.get("holder", ""))[:64]
+                if not holder:
+                    raise ValueError("holder required")
+                return self._json({"holder": db.claim_lease(holder, time.time(), LEASE_TTL, bool(body.get("force")))})
+            elif self.path == "/api/take-control":
+                if state["status"] is None:
+                    raise ValueError("no panel data yet")
+                with lock:
+                    update_control(state["status"], force=True)
             elif self.path == "/api/force":
                 with lock:
                     set_force_charge(state["status"], bool(body.get("on")))
@@ -339,5 +398,9 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8787))
     print(f"{'DEMO mode' if DEMO else 'Panel ' + (SN or 'auto-detect')} - http://{HOST}:{port} - data in {DATA_DIR}"
           + (" - login required" if PASSWORD else ""), flush=True)
+    # Starting up claims control: the most recently started copy wins.
+    holder = lease(force=True)
+    print(f"Control: {INSTANCE} {'took control' if holder == INSTANCE else 'on standby, holder: ' + str(holder)}"
+          f" (referee: {LEADER_URL or 'this copy'})", flush=True)
     threading.Thread(target=loop, daemon=True).start()
     ThreadingHTTPServer((HOST, port), Handler).serve_forever()
