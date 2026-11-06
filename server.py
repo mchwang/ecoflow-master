@@ -194,10 +194,10 @@ def refresh_savings(now, cap_wh):
             "solarToday": [round(t[3] or 0, 2), round(t[4] or 0, 2)] if t else [0.0, 0.0]}
 
 
-def dpu_profiles(now, max_soc):
-    """Per-DPU solar learned per hour of day from the last HISTORY_DAYS (see planner.fit_hourly_kw)."""
+def dpu_profiles(now, max_soc, until_ts=2**62):
+    """Per-DPU solar learned per hour of day from the last HISTORY_DAYS (see planner.fit_hourly_kw), readings before until_ts."""
     rows = [(datetime.fromtimestamp(ts, TZ).hour, s1, s2, c1, c2, g)
-            for ts, s1, s2, c1, c2, g in db.dpu_samples(now.timestamp() - HISTORY_DAYS * 86400)]
+            for ts, s1, s2, c1, c2, g in db.dpu_samples(now.timestamp() - HISTORY_DAYS * 86400) if ts < until_ts]
     return (fit_hourly_kw([(h, s1, g, c1) for h, s1, _, c1, _, g in rows], max_soc),
             fit_hourly_kw([(h, s2, g, c2) for h, _, s2, _, c2, g in rows], max_soc))
 
@@ -527,10 +527,16 @@ def tick(now=None):
         saved = refresh_savings(now, c["capacity_wh"])
         state["cap_wh"] = c["capacity_wh"]
         # Open-Meteo values are the mean of the hour ending at t, so label each bar with the hour it covers.
+        # Past hours: expected output from what was learned before today, so the measured bar isn't compared with itself.
         actual = today_solar_kw(now)
-        forecast = [{"hour": f"{t - timedelta(hours=1):%H}", "cloud": cc, "ghi": round(ghi or 0), "kw": round((ghi or 0) / 1000 * profile.get((t - timedelta(hours=1)).hour, fallback_kw), 2),
-                     "actual": actual.get((t - timedelta(hours=1)).hour)}
-                    for t, ghi, cc in (w["hourly"] if w else []) if (t - timedelta(hours=1)).date() == now.date() and (ghi or 0) > 0]
+        b1, b2 = dpu_profiles(now, c["max_soc"], datetime.combine(now.date(), datetime.min.time(), TZ).timestamp())
+        before = {h: b1[h] + b2[h] for h in b1.keys() & b2.keys()}
+        forecast = []
+        for t, ghi, cc in (w["hourly"] if w else []):
+            h = t - timedelta(hours=1)
+            if h.date() == now.date() and (ghi or 0) > 0:
+                kw = (before if h.hour < now.hour else profile).get(h.hour, fallback_kw)
+                forecast.append({"hour": f"{h:%H}", "cloud": cc, "ghi": round(ghi), "kw": round(ghi / 1000 * kw, 2), "actual": actual.get(h.hour)})
         state.update(status=s, raw=raw, error=weather["error"], updated=now.isoformat(timespec="seconds"), decision={
             "charge": charge, "kind": d["kind"], "reason": reason, "startAt": start_at and start_at.strftime("%H:%M"),
             "projectedSoc": d["projected_soc"], "solarKwh": round(pv_wh / 1000, 1),

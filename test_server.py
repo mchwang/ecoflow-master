@@ -189,6 +189,14 @@ class Commands(Base):
         self.assertEqual(server.today_solar_kw(at(10, 30)), {9: 2.0, 10: 1.0})
         self.assertNotIn(10, server.today_solar_kw(at(10, 2)))  # 2 minutes in: too early to show
 
+    def test_chart_profile_ignores_todays_readings(self):
+        for day, w in ((5, 300), (6, 900)):                    # yesterday 300 W per DPU at 500 W/m2, today 900 W
+            for m in range(25):
+                server.db.add_reading(at(10, m, day=day).timestamp(), 50, 2 * w, 0, 0, 500, 0, w, w, 50, 50)
+        midnight = at(0).timestamp()
+        self.assertAlmostEqual(server.dpu_profiles(at(12), 95, midnight)[0][10], 0.6)   # yesterday only: 300/500
+        self.assertAlmostEqual(server.dpu_profiles(at(12), 95)[0][10], 1.2)             # planner: both days
+
     def test_savings_stored_per_day_and_totalled(self):
         for d in (4, 5):                                   # 1 kW house on solar for 5 min, off-peak, two days
             for m in (0, 5):
