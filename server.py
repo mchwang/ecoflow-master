@@ -6,6 +6,7 @@ Data (SQLite history + settings) lives in DATA_DIR (default ./data; /data in Doc
 Set DASHBOARD_PASSWORD (and optionally DASHBOARD_USER) to require a login; required unless HOST is 127.0.0.1.
 """
 import base64
+import hashlib
 import hmac
 import json
 import os
@@ -17,6 +18,7 @@ import urllib.parse
 import urllib.request
 from collections import deque
 from datetime import datetime, timedelta
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -393,9 +395,48 @@ def loop():
         time.sleep(POLL_S)
 
 
-def authorized(header):
+SESSION_DAYS = 365  # iPhone home-screen apps don't keep basic-auth logins, so the page signs in with a cookie
+
+
+def _session_sig(exp):
+    # Keyed by the password: changing DASHBOARD_PASSWORD signs out every device.
+    return hmac.new(PASSWORD.encode(), f"{USER}|{exp}".encode(), hashlib.sha256).hexdigest()
+
+
+def make_session(now=None):
+    exp = int((now or time.time()) + SESSION_DAYS * 86400)
+    return f"{exp}.{_session_sig(exp)}"
+
+
+def valid_session(cookie_header, now=None):
+    try:
+        exp, _, sig = SimpleCookie(cookie_header)["hp_session"].value.partition(".")
+        return int(exp) > (now or time.time()) and hmac.compare_digest(sig, _session_sig(int(exp)))
+    except Exception:
+        return False
+
+
+LOGIN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#0f172a">
+<title>Home Power · Sign in</title><style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f172a;color:#f8fafc;font:16px/1.5 system-ui,-apple-system,sans-serif;padding:16px}
+form{width:100%;max-width:340px;display:grid;gap:12px;background:#1b2336;border:1px solid #2b3549;border-radius:16px;padding:24px}
+h1{font-size:20px;margin:0 0 4px}label{display:grid;gap:4px;font-size:14px;color:#94a3b8}
+input{font:inherit;min-height:44px;padding:8px 10px;border:1px solid #475569;border-radius:10px;background:#0f172a;color:#f8fafc}
+button{font:inherit;font-weight:600;min-height:44px;border:0;border-radius:10px;background:#22c55e;color:#0f172a;cursor:pointer}
+.err{color:#f87171;font-size:14px;margin:0}</style></head><body>
+<form method="post" action="/login"><h1>Home Power</h1>{error}
+<label>Username<input name="user" autocomplete="username" autocapitalize="none" required></label>
+<label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+<button>Sign in</button></form></body></html>"""
+
+
+def authorized(header, cookie=""):
     if not PASSWORD:
         return True  # only allowed when bound to localhost (checked at startup)
+    if valid_session(cookie):
+        return True
     try:
         user, _, pw = base64.b64decode(header.removeprefix("Basic ")).decode().partition(":")
     except Exception:
@@ -405,7 +446,7 @@ def authorized(header):
 
 class Handler(BaseHTTPRequestHandler):
     def _auth(self):
-        if authorized(self.headers.get("Authorization", "")):
+        if authorized(self.headers.get("Authorization", ""), self.headers.get("Cookie", "")):
             return True
         self.send_response(401)
         self.send_header("WWW-Authenticate", 'Basic realm="Home Power", charset="UTF-8"')
@@ -419,9 +460,18 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _login_page(self, error="", code=200):
+        body = LOGIN_PAGE.replace("{error}", f'<p class="err">{error}</p>' if error else "").encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         if self.path == "/healthz":  # unauthenticated, for Coolify's health check
             return self._json({"ok": True})
+        if self.path == "/" and not authorized(self.headers.get("Authorization", ""), self.headers.get("Cookie", "")):
+            return self._login_page()  # a sign-in page (sets a cookie) instead of the browser's basic-auth popup
         if not self._auth():
             return
         if self.path == "/":
@@ -438,6 +488,18 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "not found"}, 404)
 
     def do_POST(self):
+        if self.path == "/login":
+            form = urllib.parse.parse_qs(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode())
+            user, pw = form.get("user", [""])[0], form.get("password", [""])[0]
+            if not (hmac.compare_digest(user, USER) & hmac.compare_digest(pw, PASSWORD)):
+                time.sleep(1)  # slow down password guessing
+                return self._login_page("Wrong username or password", 401)
+            secure = "; Secure" if self.headers.get("X-Forwarded-Proto") == "https" else ""  # HTTPS via Coolify's proxy
+            self.send_response(303)
+            self.send_header("Set-Cookie", f"hp_session={make_session()}; Max-Age={SESSION_DAYS * 86400}; Path=/; HttpOnly; SameSite=Lax{secure}")
+            self.send_header("Location", "/")
+            self.end_headers()
+            return
         if not self._auth():
             return
         # Browsers can't send application/json cross-site without a CORS preflight, so this blocks

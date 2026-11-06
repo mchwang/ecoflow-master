@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Home Power">
+<meta name="theme-color" content="#0f172a">
 <title>Home Power</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap">
@@ -23,7 +27,7 @@
   * { box-sizing:border-box; }
   [hidden] { display:none !important; }
   main > *, .two > *, .kpis > *, .facts > * { min-width:0; }  /* let wide tables scroll inside cards instead of widening the page */
-  body { margin:0; padding:24px 16px 48px; background:var(--bg); color:var(--fg);
+  body { margin:0; padding:calc(24px + env(safe-area-inset-top, 0px)) 16px calc(48px + env(safe-area-inset-bottom, 0px)); background:var(--bg); color:var(--fg);
          font:15px/1.5 "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", sans-serif; }
   main { max-width:1120px; margin:0 auto; display:grid; gap:16px; }
   h1 { font-size:22px; margin:0; font-weight:700; letter-spacing:-.01em; display:flex; align-items:center; gap:10px; }
