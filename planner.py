@@ -200,25 +200,31 @@ def price_at(dt):
     return tou_period(dt)[2]
 
 
-def day_report(rows, cap_wh, max_gap_s=300, stored_delta_kwh=None):
+def day_report(rows, cap_wh, max_gap_s=300):
     """One day's energy and money from the minute readings.
 
-    rows: [(datetime, soc %, load_w, grid_w, solar_w)] in time order; each reading holds until the next,
+    rows: [(datetime, soc %, load_w, grid_w, solar_w[, battery_wh])] in time order; each reading holds until the next,
     gaps over max_gap_s (app down) are skipped. Each minute the house takes solar first, then grid, then
     battery; whatever solar and grid is left over goes into the battery. Grid kWh and $ are split by PG&E
     period. Saved = what the house would have cost all from the grid minus what the grid actually cost
     (solar, battery and its charging losses all land in that difference).
-    stored_delta_kwh: the change in battery energy from the panel's Wh reading; without it the whole-% level is
-    used, which moves in ~1% steps. Energy balance: energy in (grid + solar + drawn from earlier charge) =
+    The battery's change is added up over the same counted intervals, from the panel's Wh reading when both ends
+    have it (the whole-% level moves in ~1% steps), so app downtime adds nothing to either side. Energy balance:
+    energy in (grid + solar + drawn from earlier charge) =
     home + stored + losses; balance_kwh is the raw losses figure (negative = the meters disagree a little).
     """
     periods = ("off-peak", "part-peak", "peak")
     grid_home, grid_batt, grid_usd = (dict.fromkeys(periods, 0.0) for _ in range(3))
-    solar_home = solar_batt = batt_home = home = without = 0.0
-    for (t, _, load, grid, solar), (t_next, *_) in zip(rows, rows[1:]):
+    solar_home = solar_batt = batt_home = home = without = delta = 0.0
+    for (t, soc, load, grid, solar, *wh), (t_next, soc_next, *rest) in zip(rows, rows[1:]):
         dt_s = (t_next - t).total_seconds()
         if not 0 < dt_s <= max_gap_s or load is None or grid is None:
             continue
+        wh_next = rest[3:4]
+        if wh and wh[0] is not None and wh_next and wh_next[0] is not None:
+            delta += (wh_next[0] - wh[0]) / 1000
+        elif soc is not None and soc_next is not None:
+            delta += (soc_next - soc) / 100 * cap_wh / 1000
         k = dt_s / 3.6e6                                   # W -> kWh over this reading
         load, imp, solar = max(0.0, load), max(0.0, grid), max(0.0, solar or 0)
         period, _, price = tou_period(t)
@@ -226,8 +232,6 @@ def day_report(rows, cap_wh, max_gap_s=300, stored_delta_kwh=None):
         solar_home += sh * k; solar_batt += (solar - sh) * k
         grid_home[period] += gh * k; grid_batt[period] += (imp - gh) * k; grid_usd[period] += imp * k * price
         batt_home += (load - sh - gh) * k; home += load * k; without += load * k * price
-    socs = [r[1] for r in rows if r[1] is not None]
-    delta = stored_delta_kwh if stored_delta_kwh is not None else (socs[-1] - socs[0]) / 100 * cap_wh / 1000 if socs else 0.0
     into = solar_batt + sum(grid_batt.values())
     grid_cost = sum(grid_usd.values())
     energy_in = solar_home + solar_batt + sum(grid_home.values()) + sum(grid_batt.values()) + max(0.0, -delta)
@@ -238,7 +242,9 @@ def day_report(rows, cap_wh, max_gap_s=300, stored_delta_kwh=None):
             "batt_home": batt_home, "home_kwh": home, "drawn_kwh": max(0.0, -delta), "stored_kwh": max(0.0, delta),
             "losses_kwh": max(0.0, balance), "balance_kwh": balance,  # the flow diagram can't draw a negative
             "energy_in": energy_in, "loss_pct": max(0.0, balance) / energy_in * 100 if energy_in else 0.0,
-            "batt_eff": min(100.0, (1 - balance / into) * 100) if into > 0.05 and balance >= -0.05 else None,  # unknown if meters disagree
+            # share of everything that passed through the battery (charged today or drawn from earlier) not lost
+            "batt_eff": min(100.0, (1 - balance / (into + max(0.0, -delta))) * 100)
+                        if into + max(0.0, -delta) > 0.05 and balance >= -0.05 else None,  # unknown if meters disagree
             "cost_without": without, "grid_cost": grid_cost, "saved": without - grid_cost}
 
 

@@ -121,10 +121,10 @@ class DayReport(unittest.TestCase):
 
     def test_grid_charged_off_peak_used_at_peak(self):
         rows = [(at(2), 50, 500, 1750, 0),    # 2-3 AM: house 0.5 kW from grid + 1.25 kWh into the battery
-                (at(3), 62, 500, 500, 0),
+                (at(3), 60, 500, 500, 0),     # 1.25 kWh in -> +1.0 kWh stored
                 (at(17), 60, 1000, 0, 0),     # 5-6 PM peak: battery runs the 1 kW house
                 (at(18), 50, 1000, 1000, 0)]
-        r = day_report(rows, self.CAP, max_gap_s=50000)
+        r = day_report(rows, self.CAP, max_gap_s=50000)   # 3 AM-5 PM is skipped as downtime
         self.assertAlmostEqual(r["grid_home"]["off-peak"], 0.5); self.assertAlmostEqual(r["grid_batt"]["off-peak"], 1.25)
         self.assertAlmostEqual(r["batt_home"], 1.0); self.assertAlmostEqual(r["home_kwh"], 1.5)
         self.assertAlmostEqual(r["stored_kwh"], 0); self.assertAlmostEqual(r["losses_kwh"], 0.25)   # 20% of 1.25 lost
@@ -140,18 +140,30 @@ class DayReport(unittest.TestCase):
         self.assertAlmostEqual(r["home_kwh"], 1.0 + 0.7 / 60)
 
     def test_precise_stored_energy_gives_losses_and_efficiency(self):
-        rows = [(at(2), 50, 0, 1000, 0), (at(3), 50, 0, 0, 0)]       # 1 kWh into the battery; whole-% level didn't move
-        r = day_report(rows, self.CAP, max_gap_s=3600, stored_delta_kwh=0.9)  # panel's Wh reading: +0.9 kWh stored
+        rows = [(at(2), 50, 0, 1000, 0, 5000), (at(3), 50, 0, 0, 0, 5900)]  # 1 kWh in; Wh reading +0.9, % didn't move
+        r = day_report(rows, self.CAP, max_gap_s=3600)
         self.assertAlmostEqual(r["stored_kwh"], 0.9); self.assertAlmostEqual(r["losses_kwh"], 0.1)
         self.assertAlmostEqual(r["energy_in"], 1.0); self.assertAlmostEqual(r["loss_pct"], 10)
         self.assertAlmostEqual(r["batt_eff"], 90)                     # 0.9 of the 1.0 kWh charged is still there
 
     def test_meter_gap_is_reported_not_hidden(self):
-        rows = [(at(2), 50, 0, 1000, 0), (at(3), 50, 0, 0, 0)]
-        r = day_report(rows, self.CAP, max_gap_s=3600, stored_delta_kwh=1.1)  # meters say more stored than went in
+        rows = [(at(2), 50, 0, 1000, 0, 5000), (at(3), 50, 0, 0, 0, 6100)]  # meters say more stored than went in
+        r = day_report(rows, self.CAP, max_gap_s=3600)
         self.assertAlmostEqual(r["losses_kwh"], 0)                    # the flow diagram can't draw a negative
         self.assertAlmostEqual(r["balance_kwh"], -0.1)                # but the balance shows the gap
         self.assertIsNone(r["batt_eff"])                              # and efficiency isn't guessed
+
+    def test_app_down_is_not_counted_as_losses(self):
+        # App down 5:01-7:01 PM while the battery ran the house: the level drop over the gap isn't counted either.
+        rows = [(at(17), 80, 1000, 0, 0, 24576), (at(17, 1), 80, 1000, 0, 0, 24560),
+                (at(19, 1), 73, 1000, 0, 0, 22400), (at(19, 2), 73, 0, 0, 0, 22384)]
+        r = day_report(rows, 30720, max_gap_s=300)
+        self.assertAlmostEqual(r["drawn_kwh"], 0.032); self.assertAlmostEqual(r["losses_kwh"], 0, places=3)
+
+    def test_efficiency_when_the_day_uses_earlier_charge(self):
+        rows = [(at(9), 60, 0, 200, 0), (at(10), 60, 4500, 0, 0), (at(11), 15, 0, 0, 0)]  # 0.2 in, then 4.5 out of 6 -> 1.5
+        r = day_report(rows, 10000, max_gap_s=3600)
+        self.assertAlmostEqual(r["batt_eff"], (4.5 + 0) / (0.2 + 4.5) * 100)          # ~96%, not 0%
 
     def test_sources_balance_sinks(self):
         rows = [(at(9), 20, 800, 300, 900), (at(10), 25, 1200, 0, 400), (at(11), 22, 600, 3500, 100), (at(12), 40, 0, 0, 0)]

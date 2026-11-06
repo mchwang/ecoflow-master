@@ -104,14 +104,28 @@ class Commands(Base):
         full = {h: 0.0001 for h in range(7, 17)}                                 # every daylight hour learned, tiny
         self.assertIn("little sun", server.run_balance(s, server.effective(s), at(8, 30), hourly, True, full)["why"])
 
-    def test_day_uses_precise_battery_energy_only_for_the_whole_day(self):
-        for m, wh in ((0, 3000), (1, 3100), (2, 3200)):                 # Wh value recorded from the first reading
-            server.db.add_reading(at(9, m, day=5).timestamp(), 10, 0, 0, 0, 0, 0, remain_wh=wh)
-        self.assertAlmostEqual(server.day_data(at(9, day=5).date(), at(12), 30720)["report"]["stored_kwh"], 0.2)
-        server.db.add_reading(at(9, 0, day=4).timestamp(), 10, 0, 0, 0, 0, 0)          # before the upgrade: no Wh
-        for m, wh in ((30, 3000), (31, 3500)):                          # Wh only from half an hour later
-            server.db.add_reading(at(9, m, day=4).timestamp(), 10, 0, 0, 0, 0, 0, remain_wh=wh)
-        self.assertAlmostEqual(server.day_data(at(9, day=4).date(), at(12), 30720)["report"]["stored_kwh"], 0)  # falls back to %
+    def test_day_battery_change_uses_wh_and_skips_downtime(self):
+        r = lambda m, soc, wh=None, h=9: server.db.add_reading(at(h, m, day=4).timestamp(), soc, 0, 0, 0, 0, 0, remain_wh=wh)
+        r(0, 10); r(1, 10, 3000); r(2, 11, 3100)     # before the upgrade no Wh: % used; then Wh: +0.1 kWh
+        r(2, 7, 2000, h=11)                            # 2 h later (app was down): that drop isn't counted
+        self.assertAlmostEqual(server.day_data(at(9, day=4).date(), at(12), 30720)["report"]["stored_kwh"], 0.1)
+
+    def test_savings_stored_per_day_and_totalled(self):
+        for d in (4, 5):                                   # 1 kW house on solar for 5 min, off-peak, two days
+            for m in (0, 5):
+                server.db.add_reading(at(9, m, day=d).timestamp(), 50, 1000, 1000, 0, 0, 0)
+        server.db.add_reading(at(9, day=6).timestamp(), 50, 0, 0, 0, 0, 0)   # today: nothing used yet
+        with mock.patch.object(server, "day_data", wraps=server.day_data) as dd:
+            sv = server.refresh_savings(at(12), 30720)
+            first = dd.call_count
+            server.refresh_savings(at(12, 1), 30720)
+            self.assertEqual(dd.call_count - first, 4)     # past days with readings aren't recomputed (only days 1-3 and 6 are)
+        kwh = 1000 * 300 / 3.6e6                           # 5 min at 1 kW
+        day = round(kwh * 0.22558, 3)                      # EV2-A winter off-peak, as stored (3 decimals)
+        self.assertEqual([(d, v, round(k, 3)) for d, v, k, *_ in server.db.daily_savings()],
+                         [("2026-11-04", day, round(kwh, 3)), ("2026-11-05", day, round(kwh, 3)), ("2026-11-06", 0.0, 0.0)])
+        self.assertEqual((sv["today"], sv["total"], sv["allTime"], sv["days"]), (0.0, round(2 * day, 2), round(2 * day, 2), 3))
+        self.assertEqual((sv["monthWithout"], sv["monthGrid"]), (round(2 * day, 2), 0.0))
 
     def test_records_solar_and_level_per_dpu(self):
         server.fetch()
