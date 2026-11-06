@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 
 from db import DB
 from ecoflow_api import SSL_CTX, EcoFlow
-from planner import afternoon_sun, balance, daily_solar_kwh, day_report, deadline_of, decide, hourly_kwh, room_target, simulate, target_soc, hm12, fit_array_kw, fit_hourly_kw, solar_wh, solar_wh_hourly, tou_period
+from planner import afternoon_sun, balance, hold_battery, daily_solar_kwh, day_report, deadline_of, decide, hourly_kwh, room_target, simulate, target_soc, hm12, fit_array_kw, fit_hourly_kw, solar_wh, solar_wh_hourly, tou_period
 
 HERE = Path(__file__).parent
 TZ = ZoneInfo("America/Los_Angeles")
@@ -74,7 +74,6 @@ DEFAULTS = {
     "charge_w": 0,               # 0 = use the panel's chargeWattPower setting
     "margin_min": 30,
     "charging_by_us": False,     # persisted so a restart can still turn off what we turned on
-    "manual_off_until": 0,       # unix ts: you turned grid charging off by hand; no auto-charge until then
     # DPU balancing: pause DPU 2 while DPU 1 is nearly full, so DPU 1 drains and makes room for its afternoon sun.
     "bal_mode": "dry-run",       # off | dry-run | auto, separate from the charging mode until verified on the panel
     "bal_full_soc": 90,          # pause DPU 2 when DPU 1 reaches this %
@@ -82,8 +81,12 @@ DEFAULTS = {
     "bal_sun_left_wh": 100,      # resume when less forecast sunlight than this (Wh/m2) is left today...
     "bal_dpu1_left_wh": 500,     # ...or, once DPU 1's own solar is learned, less than this much DPU 1 solar (Wh)
     "bal_held": False,           # we paused DPU 2 (persisted, so we only ever resume what we paused)
+    # Discharge control: the panel never runs the house from the battery below its backup reserve, so raising
+    # the reserve to the current level holds the battery; setting it back to the outage floor releases it.
+    "outage_reserve_soc": 20,    # % always kept for outages (the reserve when the battery is released)
+    "reserve_held": None,        # reserve % we set to hold the battery (persisted, so we always release it)
 }
-NUMERIC = {"bal_dpu1_left_wh", "bal_full_soc", "bal_release_soc", "bal_sun_left_wh", "min_soc", "min_soc_cloudy", "sunny_after_wh", "lat", "lon", "pv_kw", "pv_pr", "capacity_wh", "charge_w", "margin_min"}
+NUMERIC = {"outage_reserve_soc", "bal_dpu1_left_wh", "bal_full_soc", "bal_release_soc", "bal_sun_left_wh", "min_soc", "min_soc_cloudy", "sunny_after_wh", "lat", "lon", "pv_kw", "pv_pr", "capacity_wh", "charge_w", "margin_min"}
 
 _saved = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
 cfg = {k: _saved.get(k, v) for k, v in DEFAULTS.items()}  # drops settings from older versions
@@ -292,6 +295,39 @@ def set_force_charge(s, on):
     log(f"Sent force charge {'ON' if on else 'OFF'}: {params}")
 
 
+def set_reserve(s, pct):
+    params = {"backupReserveSoc": int(pct)}
+    if DEMO:
+        demo["backupReserveSoc"] = params["backupReserveSoc"]
+    else:
+        api.set_shp2(SN, params)
+
+
+def run_reserve(s, hold, why, leader):
+    """Hold (reserve = battery level, raised in 2% steps as it fills) or release (reserve = outage floor).
+    Only the copy in control on Auto sends; any other copy releases a hold it left behind."""
+    floor, held = cfg["outage_reserve_soc"], cfg["reserve_held"]
+    want = max(floor, round(s["soc"])) if hold else None
+    if cfg["mode"] == "auto" and leader:
+        if want is None and held is not None:
+            set_reserve(s, floor); log(f"Battery released (reserve {floor:.0f}%): {why}")
+        elif want is not None and (held is None or want >= held + 2):
+            set_reserve(s, want); log(f"Battery {'held' if held is None else 'hold raised'} (reserve {want}%): {why}")
+        else:
+            return
+        cfg["reserve_held"] = want
+        save_cfg()
+    elif held is not None:
+        set_reserve(s, floor); log(f"Battery released (reserve {floor:.0f}%): this copy isn't controlling the panel now")
+        cfg["reserve_held"] = None
+        save_cfg()
+    elif cfg["mode"] != "off":
+        msg = f"[{'standby' if cfg['mode'] == 'auto' else 'dry-run'}] would {'hold the battery' if hold else 'let the battery run the house'}"
+        if state.get("lastHold") != msg:
+            log(f"{msg}: {why}")
+        state["lastHold"] = msg
+
+
 def set_dpu2(enabled):
     params = {"ch2EnableSet": 1 if enabled else 0}
     if DEMO:
@@ -350,16 +386,13 @@ def note_battery_use(s, now):
 
 
 def manual_force(on, now=None):
-    """Force charge button. Turning it off by hand holds until the end of today's cheap window,
-    so the automation doesn't switch it straight back on."""
+    """Force charge button: sends it once. The plan stays in control: in Auto, the next poll sets it back to
+    whatever the plan wants (so on/off by hand is for testing, not an override)."""
     if state["status"] is None:
         raise ValueError("no panel data yet")
-    now = now or datetime.now(TZ)
-    deadline = deadline_of(now, cfg)
     with lock:
         set_force_charge(state["status"], on)
-        cfg["charging_by_us"] = False  # manual: automation won't turn it off either
-        cfg["manual_off_until"] = 0 if on or now >= deadline else deadline.timestamp()
+        cfg["charging_by_us"] = on  # what's on the panel now, so the plan compares against reality
         save_cfg()
 
 
@@ -439,18 +472,20 @@ def tick(now=None):
         # The panel runs the house from the battery at any hour (down to its backup reserve), so simulate that
         # instead of assuming all solar is stored; and leave room at the deadline for the afternoon's spare sun.
         loads, load_now = load_profile(now), s["loadWatt"] or 0
-        model = (hourly, profile, fallback_kw, loads, load_now, c["capacity_wh"], s["backupReserveSoc"] or 0, c["max_soc"])
+        floor = cfg["outage_reserve_soc"]  # the panel's own reserve moves while we hold the battery
+        model = (hourly, profile, fallback_kw, loads, load_now, c["capacity_wh"], floor, c["max_soc"])
         c["min_soc"], room = room_target(c["min_soc"], deadline, *model)
         if room and c["min_soc"] < target_soc(c, c["sun_after_wh"])[0]:
             c["target_why"] += f"; lowered so {room:.0f}% of afternoon sun fits"
-        sim = simulate(now, deadline, s["soc"], *model)
+        period, season, price = tou_period(now)
+        held_sim = simulate(now, deadline, s["soc"], hourly, profile, fallback_kw, {}, 0, c["capacity_wh"], floor, c["max_soc"])
+        hold, hold_why = hold_battery(period, bool(s["gridOnline"]), held_sim["wasted_wh"] / 1000, cfg["reserve_held"] is not None)
+        sim = held_sim if hold else simulate(now, deadline, s["soc"], *model)  # held: house on grid until 3 PM
         c["load_hours"] = len(loads)
         d = decide(now, s["soc"], c, pv_wh, cfg["charging_by_us"], projected=round(sim["soc"], 1))
         if s["gridOnline"] == 0:  # outage: the panel runs the house from the battery; there's nothing to charge from
             d = {**d, "kind": "outage", "charge": False, "start_at": None,
                  "reason": "Grid is down: the battery is powering the house; no grid charging until it returns"}
-        elif now.timestamp() < cfg["manual_off_until"] and d["kind"] in ("planned", "charging"):
-            d = {**d, "kind": "manual", "charge": False, "reason": "You turned grid charging off by hand; it stays off for today"}
         charge, reason, start_at = d["charge"], d["reason"], d["start_at"]
         mode = cfg["mode"]
         # Once the cheap window is over, a copy always stops a charge it started, even on standby:
@@ -468,9 +503,9 @@ def tick(now=None):
                 state["lastWould"] = msg
         else:
             state["lastWould"] = None
+        run_reserve(s, hold, hold_why, leader)
         bal = run_balance(s, c, now, hourly, leader, p1)
         note_battery_use(s, now)
-        period, season, price = tou_period(now)
         saved = refresh_savings(now, c["capacity_wh"])
         state["cap_wh"] = c["capacity_wh"]
         # Open-Meteo values are the mean of the hour ending at t, so label each bar with the hour it covers.
@@ -482,6 +517,7 @@ def tick(now=None):
             "homeKwh": round(sim["home_wh"] / 1000, 1), "wastedKwh": round(sim["wasted_wh"] / 1000, 1),
             "sunrise": w and w["sunrise"], "sunset": w and w["sunset"], "forecast": forecast,
             "period": period, "season": season, "price": price, "effective": c,
+            "battery": {"hold": hold, "why": hold_why, "reserve": cfg["reserve_held"], "floor": floor},
         }, savings=saved, balance=bal, control={"instance": INSTANCE, "holder": state.get("holder"), "leader": leader,
                     "referee": LEADER_URL or "this copy", "error": state.get("leaseError")})
 
@@ -630,7 +666,7 @@ class Handler(BaseHTTPRequestHandler):
                             new[k] = v
                         elif k in NUMERIC:
                             v = float(v)
-                            if (v < 0 and k not in ("lat", "lon")) or (k in ("min_soc", "min_soc_cloudy", "bal_full_soc", "bal_release_soc") and v > 100):
+                            if (v < 0 and k not in ("lat", "lon")) or (k in ("min_soc", "min_soc_cloudy", "bal_full_soc", "bal_release_soc", "outage_reserve_soc") and v > 100):
                                 raise ValueError(f"{k} out of range")
                             new[k] = v
                         else:
