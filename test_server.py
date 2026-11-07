@@ -58,12 +58,12 @@ class Commands(Base):
         self.assertEqual(self.panel(), ["FORCE_CHARGE_ON"] * 2)
 
     def test_frozen_panel_data_pauses_automation(self):
-        server.fetch()[0]["reportedAt"] = at(5, 45).timestamp()  # last upload 15 min before this tick
-        with self.assertRaisesRegex(RuntimeError, "frozen.*5:45 AM.*15 min ago"):
+        server.fetch()[0]["reportedAt"] = at(5, 55).timestamp()  # last upload 5 min before this tick
+        with self.assertRaisesRegex(RuntimeError, "frozen.*5:55 AM.*5 min ago"):
             server.tick(at(6))
         self.assertEqual(self.sent(), [])                          # nothing sent on stale data
         self.assertEqual(server.db.readings_since(0), [])          # and nothing recorded
-        server.fetch()[0]["reportedAt"] = at(5, 59).timestamp()  # reporting again
+        server.fetch()[0]["reportedAt"] = at(5, 58).timestamp()  # 2 min ago: reporting normally
         server.tick(at(6))
         self.assertEqual(self.sent(), [True])
 
