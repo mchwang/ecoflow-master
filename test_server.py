@@ -242,6 +242,21 @@ class Commands(Base):
                 server.loop()
         self.assertEqual(server.state["error"], "Panel data is frozen: last reported at 4:12 PM")   # no "RuntimeError:" prefix
 
+    def test_failed_polls_are_logged_once_per_stretch(self):
+        class Stop(BaseException):
+            pass
+        stale = server.PanelStale("Panel data is frozen: last reported at 4:12 PM")
+        with mock.patch.object(server, "tick", side_effect=[stale, stale, RuntimeError("EcoFlow API error 1"), None]), \
+             mock.patch.object(server.wake, "wait", side_effect=[None] * 3 + [Stop]), \
+             mock.patch.object(server, "log") as log:
+            with self.assertRaises(Stop):
+                server.loop()
+        msgs = [c.args[0] for c in log.call_args_list]
+        self.assertEqual(len(msgs), 2)                     # one line when it starts, one when it recovers; not one per minute
+        self.assertRegex(msgs[0], r"^Poll failed \(readings may have a gap until it recovers\): Panel data is frozen")
+        self.assertRegex(msgs[1], r"^Polling recovered: 3 polls failed since \d+:\d\d [AP]M "
+                                  r"\(panel not reporting ×2, RuntimeError ×1\)")
+
     def test_savings_stored_per_day_and_totalled(self):
         for d in (4, 5):                                   # 1 kW house on solar for 5 min, off-peak, two days
             for m in (0, 5):

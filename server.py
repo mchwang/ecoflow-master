@@ -16,7 +16,7 @@ import time
 import traceback
 import urllib.parse
 import urllib.request
-from collections import deque
+from collections import Counter, deque
 from datetime import datetime, timedelta
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -579,14 +579,23 @@ def tick(now=None):
 
 
 def loop():
+    failed = None  # current stretch of failed polls: (start time, Counter of reasons)
     while True:
         wake.clear()
         try:
             tick()
+            if failed:  # a failed poll records no reading, so say how long the history has a hole
+                why = ", ".join(f"{k} ×{v}" for k, v in failed[1].items())
+                log(f"Polling recovered: {sum(failed[1].values())} polls failed since {failed[0]:%-I:%M %p} ({why})")
+                failed = None
         except Exception as e:  # keep polling; show the error on the dashboard
             state["error"] = str(e) if isinstance(e, PanelStale) else f"{type(e).__name__}: {e}"
             if not isinstance(e, PanelStale):  # expected while the panel is offline: no traceback every minute
                 traceback.print_exc()
+            if not failed:
+                failed = (datetime.now(TZ), Counter())
+                log(f"Poll failed (readings may have a gap until it recovers): {state['error'][:200]}")
+            failed[1]["panel not reporting" if isinstance(e, PanelStale) else type(e).__name__] += 1
         wake.wait(POLL_S)
 
 
