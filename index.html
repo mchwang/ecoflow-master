@@ -353,7 +353,7 @@
         <g style="color:var(--batt)"><circle class="node" cx="180" cy="222" r="26"/>
           <circle class="soc-track" cx="180" cy="222" r="32"/><circle id="soc-ring" class="soc-ring" cx="180" cy="222" r="32" stroke-dasharray="201.06" stroke-dashoffset="201.06"/>
           <use id="batt-ic" href="#i-battery" x="166" y="208" width="28" height="28"/></g>
-        <text x="222" y="218">Battery</text><text id="t-batt" class="sub" x="222" y="235">–</text>
+        <text id="t-batt-h" x="216" y="218">Battery</text><text id="t-batt" class="sub" x="216" y="235">–</text>
       </svg>
     </div>
     <div class="stack">
@@ -527,7 +527,8 @@ function drawFlow(s, d) {
   $('t-solar').textContent = w(solar);
   $('t-grid').textContent = s.gridOnline ? w(grid) : 'Offline';
   $('t-home').textContent = w(load);
-  $('t-batt').textContent = `${s.soc}% · ${charging ? `charging ${w(Math.max(net, 0))}` : discharging ? `discharging ${w(Math.max(-net, 0))}` : 'idle'}`;
+  $('t-batt-h').textContent = `Battery ${s.soc}%`;  // two lines: one line ran past the diagram's edge
+  $('t-batt').textContent = charging ? `charging ${w(Math.max(net, 0))}` : discharging ? `discharging ${w(Math.max(-net, 0))}` : 'idle';
   $('batt-ic').setAttribute('href', charging ? '#i-bolt-batt' : '#i-battery');
   const C = 2 * Math.PI * 32;
   $('soc-ring').style.strokeDashoffset = (C * (1 - s.soc / 100)).toFixed(1);
