@@ -468,7 +468,7 @@ def get_weather():
     return weather["data"]
 
 
-PANEL_STALE_S = 600  # the panel normally uploads every minute or two
+PANEL_STALE_S = 180  # the panel normally uploads every 9-12 s (measured 2026-11-06)
 
 
 class PanelStale(RuntimeError):
