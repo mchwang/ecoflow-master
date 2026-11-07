@@ -45,6 +45,11 @@
 
   header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; }
   .chips { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  @media (max-width:480px) {  /* phone: icon-only theme button so the header fits in two rows; label stays for screen readers */
+    #theme { min-width:44px; justify-content:center; }
+    .chips .chip { padding:4px 9px; font-size:13px; }
+    #theme-t { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+  }
   .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 12px; border-radius:999px; border:1px solid var(--line); background:var(--card); font-size:14px; }
   .dot { width:8px; height:8px; border-radius:50%; background:currentColor; flex:none; }
   .dot.live { position:relative; }
