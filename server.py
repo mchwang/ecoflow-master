@@ -291,6 +291,7 @@ def summarize(d):
         "smartBackupMode": q(d, "smartBackupMode"), "batteries": bats, "circuits": circuits,
         "dischargeFloorSoc": q(d, "backupIncreInfo.curDischargeSoc"), "solarReserveSoc": q(d, "solarBackupReserveSoc"),
         "solarWatt": sum(b["solarWatt"] or 0 for b in bats),
+        "reportedAt": q(d, "pd303_mc.uploadMark.time"),  # epoch s of the panel's last upload to EcoFlow's cloud
     }
 
 
@@ -467,11 +468,21 @@ def get_weather():
     return weather["data"]
 
 
+PANEL_STALE_S = 600  # the panel normally uploads every minute or two
+
+
 def tick(now=None):
     s, raw = fetch()
     if s["soc"] is None:  # never act on missing data (a 0% default would trigger charging)
         raise RuntimeError("battery level (backupIncreInfo.backupBatPer) missing from panel data")
     now = now or datetime.now(TZ)
+    rep = s.get("reportedAt")
+    if rep and now.timestamp() - rep > PANEL_STALE_S:
+        # EcoFlow keeps serving the last snapshot when the panel stops uploading: never act on or record it
+        t = datetime.fromtimestamp(rep, TZ)
+        raise RuntimeError(f"Panel data is frozen: the Smart Home Panel last reported to EcoFlow at {t:%-I:%M %p} "
+                           f"({int((now.timestamp() - rep) // 60)} min ago). The numbers shown are from then, and automation "
+                           "is paused until it reports again. Check the panel and both DELTA Pro Ultras in the EcoFlow app.")
     w = get_weather()
     leader = update_control(s)
     with lock:
