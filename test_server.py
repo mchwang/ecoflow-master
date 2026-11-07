@@ -232,6 +232,16 @@ class Commands(Base):
                 server.loop()
         self.assertLess(calls[1] - calls[0], 5)                    # ...reads again in seconds, not POLL_S (60)
 
+    def test_frozen_panel_warning_is_shown_plainly(self):
+        class Stop(BaseException):
+            pass
+        stale = server.PanelStale("Panel data is frozen: last reported at 4:12 PM")
+        with mock.patch.object(server, "tick", side_effect=stale), \
+             mock.patch.object(server.wake, "wait", side_effect=Stop):
+            with self.assertRaises(Stop):
+                server.loop()
+        self.assertEqual(server.state["error"], "Panel data is frozen: last reported at 4:12 PM")   # no "RuntimeError:" prefix
+
     def test_savings_stored_per_day_and_totalled(self):
         for d in (4, 5):                                   # 1 kW house on solar for 5 min, off-peak, two days
             for m in (0, 5):
