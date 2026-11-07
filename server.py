@@ -471,6 +471,10 @@ def get_weather():
 PANEL_STALE_S = 600  # the panel normally uploads every minute or two
 
 
+class PanelStale(RuntimeError):
+    """Shown on the dashboard as-is: a plain warning, not a crash."""
+
+
 def tick(now=None):
     s, raw = fetch()
     if s["soc"] is None:  # never act on missing data (a 0% default would trigger charging)
@@ -480,7 +484,7 @@ def tick(now=None):
     if rep and now.timestamp() - rep > PANEL_STALE_S:
         # EcoFlow keeps serving the last snapshot when the panel stops uploading: never act on or record it
         t = datetime.fromtimestamp(rep, TZ)
-        raise RuntimeError(f"Panel data is frozen: the Smart Home Panel last reported to EcoFlow at {t:%-I:%M %p} "
+        raise PanelStale(f"Panel data is frozen: the Smart Home Panel last reported to EcoFlow at {t:%-I:%M %p} "
                            f"({int((now.timestamp() - rep) // 60)} min ago). The numbers shown are from then, and automation "
                            "is paused until it reports again. Check the panel and both DELTA Pro Ultras in the EcoFlow app.")
     w = get_weather()
@@ -580,8 +584,9 @@ def loop():
         try:
             tick()
         except Exception as e:  # keep polling; show the error on the dashboard
-            state["error"] = f"{type(e).__name__}: {e}"
-            traceback.print_exc()
+            state["error"] = str(e) if isinstance(e, PanelStale) else f"{type(e).__name__}: {e}"
+            if not isinstance(e, PanelStale):  # expected while the panel is offline: no traceback every minute
+                traceback.print_exc()
         wake.wait(POLL_S)
 
 
@@ -757,7 +762,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             tick()  # refresh the dashboard now
         except Exception as e:  # the change already went through; show the panel error in the banner instead
-            state["error"] = f"{type(e).__name__}: {e}"
+            state["error"] = str(e) if isinstance(e, PanelStale) else f"{type(e).__name__}: {e}"
         self._json({"ok": True})
 
     def log_message(self, *a):
