@@ -71,7 +71,7 @@
   @keyframes flash { from { color:var(--c, var(--ok)); text-shadow:0 0 14px color-mix(in srgb, var(--c, var(--ok)) 60%, transparent); } }
 
   /* energy flow diagram */
-  .flowcard { display:grid; gap:4px; }
+  .flowcard { display:grid; gap:4px; grid-template-rows:auto 1fr; }  /* spare height goes to the diagram, heading stays on top */
   .flow { width:100%; max-height:300px; display:block; margin:auto 0; }
   .flow text { fill:var(--fg); font:600 16px "Exo 2", system-ui, sans-serif; }
   .flow text.sub { fill:var(--mute); font-weight:500; font-size:15px; }
