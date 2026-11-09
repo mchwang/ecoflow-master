@@ -88,6 +88,21 @@ def room_target(target, deadline, hourly, kw_by_hour, fallback_kw, load_by_hour,
     return max(floor_soc, min(target, max_soc - room)), room
 
 
+def evening_target(target, deadline, hourly, kw_by_hour, fallback_kw, load_by_hour, load_now, cap, floor_soc, max_soc):
+    """Lower the deadline target to what the house needs from the deadline to midnight (load minus solar), so
+    no grid-charged energy is left at midnight to run the house off-peak, where its ~20% round-trip loss
+    costs more than grid power directly. Returns (target, need %).
+    shortcut: solar surplus counts in full even past max_soc; room_target already caps the target for that."""
+    run = need = 0.0
+    midnight = deadline.replace(hour=0, minute=0) + timedelta(days=1)
+    for s, l in _hours(deadline, midnight, hourly, kw_by_hour, fallback_kw, load_by_hour, load_now):
+        run += l - s
+        need = max(need, run)  # deepest drain below the 3 PM level before midnight
+    # 10% headroom: short at peak costs ~$0.13/kWh, a leftover kWh only ~$0.06, so err on the high side
+    pct = need * 1.1 / cap * 100
+    return max(floor_soc, min(target, floor_soc + pct)), pct
+
+
 def afternoon_sun(now, cfg, hourly):
     """Forecast sunlight (Wh/m2) from today's deadline to the end of the day; None without a forecast."""
     if not hourly:
