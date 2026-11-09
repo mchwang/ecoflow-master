@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from ecoflow_api import sign
-from planner import afternoon_sun, balance, hold_battery, daily_solar_kwh, day_report, decide, fit_hourly_kw, hourly_kwh, room_target, simulate, solar_wh_hourly, target_soc, fit_array_kw, hm12, solar_wh, tou_period
+from planner import afternoon_sun, evening_target, balance, hold_battery, daily_solar_kwh, day_report, decide, fit_hourly_kw, hourly_kwh, room_target, simulate, solar_wh_hourly, target_soc, fit_array_kw, hm12, solar_wh, tou_period
 
 TZ = ZoneInfo("America/Los_Angeles")
 CFG = {"capacity_wh": 30720, "charge_w": 4000, "min_soc": 60, "max_soc": 95,
@@ -207,6 +207,16 @@ class Simulate(unittest.TestCase):
         t, room = room_target(80, at(15), hourly, {}, 2.0, {}, 500, self.CAP, 10, 95)
         self.assertAlmostEqual(t, 50); self.assertAlmostEqual(room, 45)   # 4.5 kWh surplus needs 45% free at 3 PM
         self.assertEqual(room_target(40, at(15), hourly, {}, 2.0, {}, 500, self.CAP, 10, 95)[0], 40)  # already fits
+
+    def test_target_covers_only_the_evening_need(self):
+        dark = [(at(h), 0) for h in range(24)]
+        # 500 W from 3 PM to midnight = 4.5 kWh, +10% headroom = 4.95 kWh = 49.5% on top of the 10% reserve
+        t, need = evening_target(95, at(15), dark, {}, 0, {}, 500, self.CAP, 10, 95)
+        self.assertAlmostEqual(need, 49.5); self.assertAlmostEqual(t, 59.5)
+        self.assertEqual(evening_target(40, at(15), dark, {}, 0, {}, 500, self.CAP, 10, 95)[0], 40)  # never raises
+        self.assertEqual(evening_target(60, at(15), dark, {}, 0, {}, 0, self.CAP, 10, 95)[0], 10)    # no load: reserve
+        sunny = [(at(h), 1000 if 16 <= h <= 17 else 0) for h in range(24)]  # sun covers the house 3-5 PM
+        self.assertAlmostEqual(evening_target(95, at(15), sunny, {}, 0.5, {}, 500, self.CAP, 10, 95)[1], 38.5)
 
     def test_decide_uses_simulated_level(self):
         d = decide(at(6), 30, CFG, 5000, projected=20)         # sun would add, but the house uses more

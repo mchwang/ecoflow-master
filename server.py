@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 
 from db import DB
 from ecoflow_api import SSL_CTX, EcoFlow
-from planner import afternoon_sun, balance, hold_battery, daily_solar_kwh, day_report, deadline_of, decide, hourly_kwh, room_target, simulate, target_soc, hm12, fit_array_kw, fit_hourly_kw, solar_wh, solar_wh_hourly, tou_period
+from planner import afternoon_sun, evening_target, balance, hold_battery, daily_solar_kwh, day_report, deadline_of, decide, hourly_kwh, room_target, simulate, target_soc, hm12, fit_array_kw, fit_hourly_kw, solar_wh, solar_wh_hourly, tou_period
 
 HERE = Path(__file__).parent
 TZ = ZoneInfo("America/Los_Angeles")
@@ -517,8 +517,14 @@ def tick(now=None):
         loads, load_now = load_profile(now), s["loadWatt"] or 0
         floor = cfg["outage_reserve_soc"]  # the panel's own reserve moves while we hold the battery
         model = (hourly, profile, fallback_kw, loads, load_now, c["capacity_wh"], floor, c["max_soc"])
-        c["min_soc"], room = room_target(c["min_soc"], deadline, *model)
-        if room and c["min_soc"] < target_soc(c, c["sun_after_wh"])[0]:
+        if loads:  # without a learned load the fixed target stays (one live reading is too noisy for the evening)
+            want = c["min_soc"]
+            c["min_soc"], need = evening_target(want, deadline, *model)
+            if c["min_soc"] < want:
+                c["target_why"] += f"; lowered to the evening's need ({need:.0f}% to midnight)"
+        want = c["min_soc"]
+        c["min_soc"], room = room_target(want, deadline, *model)
+        if room and c["min_soc"] < want:
             c["target_why"] += f"; lowered so {room:.0f}% of afternoon sun fits"
         period, season, price = tou_period(now)
         held_sim = simulate(now, deadline, s["soc"], hourly, profile, fallback_kw, {}, 0, c["capacity_wh"], floor, c["max_soc"])

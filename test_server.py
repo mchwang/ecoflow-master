@@ -57,6 +57,13 @@ class Commands(Base):
         self.assertEqual(self.sent(), [True])
         self.assertEqual(self.panel(), ["FORCE_CHARGE_ON"] * 2)
 
+    def test_target_lowered_to_evening_need(self):
+        with mock.patch.object(server, "load_profile", return_value={h: 100 for h in range(24)}):
+            server.tick(at(6))
+        d = server.state["decision"]
+        self.assertIn("evening's need", d["effective"]["target_why"])
+        self.assertLess(d["effective"]["min_soc"], 60)
+
     def test_frozen_panel_data_pauses_automation(self):
         server.fetch()[0]["reportedAt"] = at(5, 55).timestamp()  # last upload 5 min before this tick
         with self.assertRaisesRegex(RuntimeError, "frozen.*5:55 AM.*5 min ago"):
