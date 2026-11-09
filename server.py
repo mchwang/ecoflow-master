@@ -414,6 +414,23 @@ def note_battery_use(s, now):
         else f"House back on grid at {hm12(now)} ({extra})")
 
 
+def note_grid_charge(s, now, ours):
+    """Warn when the battery charges from the grid without our force charge (2026-11-09: the panel topped
+    up to its own 95% solar reserve after we turned force charge off, and the afternoon sun was wasted).
+    Grid into battery = grid draw beyond what the house needs after solar; >500 W starts, <100 W ends."""
+    into = (s["gridWatt"] or 0) - max(0, (s["loadWatt"] or 0) - (s["solarWatt"] or 0))
+    was = state.get("unplannedCharge")
+    on = not ours and bool(s["gridOnline"]) and (into > 500 or (was is not None and into >= 100))
+    if on and was is None:
+        state["unplannedCharge"] = now
+        log(f"Warning: the panel is charging the battery from the grid without our force charge ({into:.0f} W; battery "
+            f"{s['soc']:.0f}%, backup reserve {s.get('backupReserveSoc') or 0:.0f}%, solar reserve {s.get('solarReserveSoc') or 0:.0f}%). "
+            "Check the panel's reserve and backup-mode settings in the EcoFlow app")
+    elif not on and was is not None:
+        state["unplannedCharge"] = None
+        log(f"Unplanned grid charge ended at {hm12(now)} (started {hm12(was)}, battery {s['soc']:.0f}%)")
+
+
 def manual_force(on, now=None):
     """Force charge button: sends it once. The plan stays in control: in Auto, the next poll sets it back to
     whatever the plan wants (so on/off by hand is for testing, not an override)."""
@@ -556,6 +573,7 @@ def tick(now=None):
         run_reserve(s, hold, hold_why, leader)
         bal = run_balance(s, c, now, hourly, leader, p1)
         note_battery_use(s, now)
+        note_grid_charge(s, now, cfg["charging_by_us"])
         saved = refresh_savings(now, c["capacity_wh"])
         state["cap_wh"] = c["capacity_wh"]
         # Open-Meteo values are the mean of the hour ending at t, so label each bar with the hour it covers.

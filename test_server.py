@@ -35,7 +35,7 @@ class Base(unittest.TestCase):
         self.addCleanup(server.db.conn.close)
         server.cfg.clear()
         server.cfg.update(server.DEFAULTS, mode="auto", hold_mode="auto", margin_min=900)  # big margin: charge window open all morning
-        for k in ("leader", "holder", "lastWould", "lastBal", "onBattery", "lastHold"):
+        for k in ("leader", "holder", "lastWould", "lastBal", "onBattery", "lastHold", "unplannedCharge"):
             server.state.pop(k, None)
         server.state["status"] = None
         p1 = mock.patch.object(server, "set_force_charge", wraps=server.set_force_charge)
@@ -118,6 +118,27 @@ class Commands(Base):
         s.update(gridWatt=900, soc=20)                           # all from grid again
         server.tick(at(21))
         self.assertEqual(len(taken()), 2); self.assertIn("House back on grid", taken()[0])
+
+    def test_warns_when_the_panel_grid_charges_on_its_own(self):
+        server.cfg["mode"] = "dry-run"                           # we never turn force charge on
+        s = server.fetch()[0]
+        warned = lambda: [l for l in server.state["log"] if "without our force charge" in l or "Unplanned grid charge ended" in l]
+        s.update(loadWatt=700, solarWatt=1500, gridWatt=0, soc=52, solarReserveSoc=95)
+        server.tick(at(13))
+        self.assertEqual(warned(), [])                           # solar covers the house, no grid
+        s.update(gridWatt=4000)                                  # 4 kW from grid, house needs none of it
+        server.tick(at(13, 9)); server.tick(at(13, 10))
+        self.assertEqual(len(warned()), 1); self.assertIn("4000 W", warned()[0]); self.assertIn("solar reserve 95%", warned()[0])
+        s.update(gridWatt=300)                                   # tapering: still charging, no new line
+        server.tick(at(14))
+        self.assertEqual(len(warned()), 1)
+        s.update(gridWatt=0, soc=96)
+        server.tick(at(14, 18))
+        self.assertEqual(len(warned()), 2); self.assertIn("started 1:09 PM", warned()[0])
+        server.cfg["charging_by_us"] = True                      # our own charge: never a warning
+        s.update(gridWatt=4000)
+        server.tick(at(14, 20))
+        self.assertEqual(len(warned()), 2)
 
     def reserves(self):
         return [c.args[1] for c in self.reserve.call_args_list]
