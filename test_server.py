@@ -1,6 +1,6 @@
 """Server-level tests: which copy sends which commands, manual overrides, settings saves.
 
-Runs in demo mode (no EcoFlow calls) against a scratch database; set_force_charge / set_dpu2
+Runs in demo mode (no EcoFlow calls) against a scratch database; set_force_charge / set_dpu
 are wrapped so each test sees exactly which commands would reach the panel.
 """
 import json
@@ -39,7 +39,7 @@ class Base(unittest.TestCase):
             server.state.pop(k, None)
         server.state["status"] = None
         p1 = mock.patch.object(server, "set_force_charge", wraps=server.set_force_charge)
-        p2 = mock.patch.object(server, "set_dpu2", wraps=server.set_dpu2)
+        p2 = mock.patch.object(server, "set_dpu", wraps=server.set_dpu)
         p3 = mock.patch.object(server, "set_reserve", wraps=server.set_reserve)
         self.force, self.dpu2, self.reserve = p1.start(), p2.start(), p3.start()
         self.addCleanup(mock.patch.stopall)
@@ -318,8 +318,26 @@ class Commands(Base):
         self.assertEqual(self.dpu2.call_count, 0)
         server.cfg["bal_mode"] = "auto"
         server.tick(at(1, 1))
-        self.dpu2.assert_called_once_with(False)
-        self.assertTrue(server.cfg["bal_held"])
+        self.dpu2.assert_called_once_with(2, False)
+        self.assertEqual(server.cfg["bal_paused"], 2)
+
+    def test_balancing_keeps_dpus_within_ten_percent(self):
+        server.cfg.update(margin_min=30, bal_mode="auto")       # no grid charge at 1 AM
+        server.fetch()
+        b1, b2 = server.demo["batteries"]
+        b1["soc"], b2["soc"] = 50, 60                          # DPU 2 10% fuller: pause DPU 1
+        server.tick(at(1))
+        self.assertEqual([c.args for c in self.dpu2.call_args_list], [(1, False)])
+        self.assertEqual(server.cfg["bal_paused"], 1)
+        b1["soc"], b2["soc"] = 50, 49                          # within 3%: resume DPU 1
+        server.tick(at(1, 1))
+        self.assertEqual([c.args for c in self.dpu2.call_args_list], [(1, False), (1, True)])
+        self.assertEqual(server.cfg["bal_paused"], 0)
+        server.cfg["bal_paused"] = 1                           # paused DPU 1, then DPU 1 ends up 10% fuller
+        b1["soc"], b2["soc"] = 70, 60
+        server.tick(at(1, 2))                                  # resume DPU 1 before pausing DPU 2, never both off
+        self.assertEqual([c.args for c in self.dpu2.call_args_list][2:], [(1, True), (2, False)])
+        self.assertEqual(server.cfg["bal_paused"], 2)
 
 
 class HttpServer(Base):  # starts the real handler; no tests of its own

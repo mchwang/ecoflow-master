@@ -97,22 +97,38 @@ class PerDpuSolar(unittest.TestCase):
 
 
 class Balance(unittest.TestCase):
-    C = {"bal_full_soc": 90, "bal_release_soc": 75, "bal_sun_left_wh": 100}
+    C = {"bal_full_soc": 90, "bal_release_soc": 75, "bal_sun_left_wh": 100, "bal_max_spread": 10}
 
-    def b(self, d1, held=False, grid=True, charging=False, sun=1000):
-        return balance(d1, grid, charging, sun, self.C['bal_sun_left_wh'], held, self.C)[0]
+    def b(self, d1, d2=None, paused=0, grid=True, charging=False, sun=1000):
+        d2 = d1 if d2 is None else d2
+        return balance(d1, d2, grid, charging, sun, self.C['bal_sun_left_wh'], paused, self.C)[0]
 
     def test_pause_when_dpu1_nearly_full_and_hold_until_release(self):
-        self.assertFalse(self.b(85))
-        self.assertTrue(self.b(90))
-        self.assertTrue(self.b(80, held=True))    # hysteresis: stays paused between 75 and 90
-        self.assertFalse(self.b(75, held=True))   # DPU 1 drained enough: resume DPU 2
+        self.assertEqual(self.b(85), 0)
+        self.assertEqual(self.b(90), 2)
+        self.assertEqual(self.b(80, 82, paused=2), 2)    # hysteresis: stays paused between 75 and 90
+        self.assertEqual(self.b(75, 77, paused=2), 0)    # DPU 1 drained enough: resume DPU 2
+
+    def test_making_room_never_drains_dpu1_far_below_dpu2(self):
+        self.assertEqual(self.b(84, 88, paused=2), 2)
+        self.assertEqual(self.b(83, 88, paused=2), 0)    # 5% below DPU 2: resume, well inside the 10% limit
+
+    def test_keeps_the_two_within_ten_percent(self):
+        self.assertEqual(self.b(60, 51), 0)
+        self.assertEqual(self.b(60, 50), 2)              # DPU 1 10% higher: pause DPU 2, the house drains DPU 1
+        self.assertEqual(self.b(50, 60), 1)              # DPU 2 10% higher: pause DPU 1
+        self.assertEqual(self.b(54, 50, paused=2), 2)    # keeps going until they're within 3%
+        self.assertEqual(self.b(53, 50, paused=2), 0)
+        self.assertEqual(self.b(47, 50, paused=1), 0)
+        self.assertEqual(self.b(50, 60, sun=40), 1)      # spread rule runs with no sun left too
+        self.assertEqual(self.b(85, 95), 1)              # a spread wins over making room for DPU 1
 
     def test_safety_releases(self):
-        self.assertFalse(self.b(95, held=True, grid=False))       # outage: need both
-        self.assertFalse(self.b(95, held=True, charging=True))    # grid charging both
-        self.assertFalse(self.b(95, held=True, sun=40))           # no sun left to make room for
-        self.assertTrue(self.b(95, sun=None))                     # no forecast: rule still works on levels
+        self.assertEqual(self.b(95, paused=2, grid=False), 0)       # outage: need both
+        self.assertEqual(self.b(50, 70, grid=False), 0)
+        self.assertEqual(self.b(95, paused=2, charging=True), 0)    # grid charging both
+        self.assertEqual(self.b(95, paused=2, sun=40), 0)           # no sun left to make room for
+        self.assertEqual(self.b(95, sun=None), 2)                   # no forecast: rule still works on levels
 
 
 class DayReport(unittest.TestCase):

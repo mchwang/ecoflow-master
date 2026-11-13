@@ -293,25 +293,35 @@ def hold_battery(period, grid_online, waste_if_held_kwh, held):
     return False, "a little solar would overflow: the battery keeps running the house"
 
 
-def balance(dpu1_soc, grid_online, grid_charging, sun_left, sun_min, held, cfg):
-    """Should DPU 2 be paused so the house drains DPU 1 first?
+def balance(dpu1_soc, dpu2_soc, grid_online, grid_charging, sun_left, sun_min, paused, cfg):
+    """Which DPU should be paused (0 = neither, 1 or 2), so the house draws from the other one?
 
-    DPU 1 (bigger, sunnier in the afternoon) nearly full -> pause DPU 2 so DPU 1 makes room for its
-    afternoon solar instead of wasting it. Safety releases win over everything: grid down (need full
-    backup), our grid charge running (charge both), DPU 1 drained to the release level, or no
-    meaningful sun left today (sun_left below sun_min; None = unknown, rule runs on levels).
-    Returns (hold, reason).
+    Two rules. Keep the DPUs within cfg["bal_max_spread"] % of each other: at that spread the fuller one is
+    paused until they're within 3% (pausing only stops a DPU running the house; its own solar still charges it,
+    so the gap closes only while the batteries run the house). And DPU 1 (bigger, sunnier in the afternoon) nearly
+    full -> pause DPU 2 so DPU 1 makes room for its afternoon solar, until DPU 1 drops to the release level or
+    5% below DPU 2. Safety releases win over both: grid down (need full backup) and our grid charge running
+    (charge both). No meaningful sun left today (sun_left below sun_min; None = unknown) ends the room rule.
+    paused: the DPU we paused now (0 = none). Returns (pause, reason).
     """
     if not grid_online:
-        return False, "grid is down: both batteries available for backup"
+        return 0, "grid is down: both batteries available for backup"
     if grid_charging:
-        return False, "grid charging: both batteries charge"
+        return 0, "grid charging: both batteries charge"
+    gap, lim = dpu1_soc - dpu2_soc, cfg["bal_max_spread"]
+    levels = f"DPU 1 {dpu1_soc:.0f}%, DPU 2 {dpu2_soc:.0f}%"
+    if gap <= -lim or (paused == 1 and gap < -3):
+        return 1, f"{levels}: pausing DPU 1 so the house drains DPU 2 until they're within 3%"
+    if gap >= lim or (paused == 2 and gap > 3):
+        return 2, f"{levels}: pausing DPU 2 so the house drains DPU 1 until they're within 3%"
     if sun_left is not None and sun_left < sun_min:
-        return False, "little sun left today: nothing to make room for"
-    if held:
+        return 0, "little sun left today: nothing to make room for"
+    if paused == 2:
         if dpu1_soc <= cfg["bal_release_soc"]:
-            return False, f"DPU 1 down to {dpu1_soc:.0f}%: room for its solar again"
-        return True, f"DPU 1 at {dpu1_soc:.0f}%: house runs on DPU 1 until it reaches {cfg['bal_release_soc']:.0f}%"
+            return 0, f"DPU 1 down to {dpu1_soc:.0f}%: room for its solar again"
+        if gap <= -5:
+            return 0, f"{levels}: DPU 1 well below DPU 2, so both run the house again"
+        return 2, f"DPU 1 at {dpu1_soc:.0f}%: house runs on DPU 1 until it reaches {cfg['bal_release_soc']:.0f}%"
     if dpu1_soc >= cfg["bal_full_soc"]:
-        return True, f"DPU 1 nearly full ({dpu1_soc:.0f}%): pausing DPU 2 so DPU 1 makes room for afternoon sun"
-    return False, f"DPU 1 at {dpu1_soc:.0f}%: pauses DPU 2 at {cfg['bal_full_soc']:.0f}%"
+        return 2, f"DPU 1 nearly full ({dpu1_soc:.0f}%): pausing DPU 2 so DPU 1 makes room for afternoon sun"
+    return 0, f"{levels}: within {lim:.0f}%; pauses DPU 2 when DPU 1 reaches {cfg['bal_full_soc']:.0f}%"

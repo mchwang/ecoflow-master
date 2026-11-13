@@ -75,13 +75,15 @@ DEFAULTS = {
     "charge_w": 0,               # 0 = use the panel's chargeWattPower setting
     "margin_min": 30,
     "charging_by_us": False,     # persisted so a restart can still turn off what we turned on
-    # DPU balancing: pause DPU 2 while DPU 1 is nearly full, so DPU 1 drains and makes room for its afternoon sun.
+    # DPU balancing: pause one DPU so the house drains the other: keeps them within bal_max_spread %, and pauses
+    # DPU 2 while DPU 1 is nearly full, so DPU 1 drains and makes room for its afternoon sun.
     "bal_mode": "dry-run",       # off | dry-run | auto, separate from the charging mode until verified on the panel
     "bal_full_soc": 90,          # pause DPU 2 when DPU 1 reaches this %
     "bal_release_soc": 75,       # resume DPU 2 when DPU 1 drops to this %
     "bal_sun_left_wh": 100,      # resume when less forecast sunlight than this (Wh/m2) is left today...
     "bal_dpu1_left_wh": 500,     # ...or, once DPU 1's own solar is learned, less than this much DPU 1 solar (Wh)
-    "bal_held": False,           # we paused DPU 2 (persisted, so we only ever resume what we paused)
+    "bal_max_spread": 10,        # pause the fuller DPU when the two are this many % apart
+    "bal_paused": 0,             # DPU we paused, 0 = none (persisted, so we only ever resume what we paused)
     # Discharge control: the panel never runs the house from the battery below its backup reserve, so raising
     # the reserve to the current level holds the battery; setting it back to the outage floor releases it.
     "hold_mode": "dry-run",      # off | dry-run | auto: holding by reserve = level made the panel grid-charge at
@@ -89,10 +91,12 @@ DEFAULTS = {
     "outage_reserve_soc": 20,    # % always kept for outages (the reserve when the battery is released)
     "reserve_held": None,        # reserve % we set to hold the battery (persisted, so we always release it)
 }
-NUMERIC = {"outage_reserve_soc", "bal_dpu1_left_wh", "bal_full_soc", "bal_release_soc", "bal_sun_left_wh", "min_soc", "min_soc_cloudy", "sunny_after_wh", "lat", "lon", "pv_kw", "pv_pr", "capacity_wh", "charge_w", "margin_min"}
+NUMERIC = {"outage_reserve_soc", "bal_dpu1_left_wh", "bal_full_soc", "bal_release_soc", "bal_sun_left_wh", "bal_max_spread", "min_soc", "min_soc_cloudy", "sunny_after_wh", "lat", "lon", "pv_kw", "pv_pr", "capacity_wh", "charge_w", "margin_min"}
 
 _saved = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
 cfg = {k: _saved.get(k, v) for k, v in DEFAULTS.items()}  # drops settings from older versions
+if _saved.get("bal_held"):  # before 2026-11-13 only DPU 2 could be paused
+    cfg["bal_paused"] = 2
 lock = threading.Lock()
 wake = threading.Event()  # set to start the next poll early
 state = {"status": None, "decision": None, "error": None, "updated": None,
@@ -311,7 +315,7 @@ def reread_soon():
 
 def set_force_charge(s, on):
     params = {f"ch{b['n']}ForceCharge": "FORCE_CHARGE_ON" if on else "FORCE_CHARGE_OFF" for b in s["batteries"]
-              if b["enabled"] != 0 or (b["n"] == 2 and cfg["bal_held"])}  # include DPU 2 if only we paused it
+              if b["enabled"] != 0 or b["n"] == cfg["bal_paused"]}  # include a DPU only we paused
     if DEMO:
         for b in demo["batteries"]:
             b["forceCharge"] = params[f"ch{b['n']}ForceCharge"]
@@ -356,24 +360,26 @@ def run_reserve(s, hold, why, leader):
         state["lastHold"] = msg
 
 
-def set_dpu2(enabled):
-    params = {"ch2EnableSet": 1 if enabled else 0}
+def set_dpu(n, enabled):
+    params = {f"ch{n}EnableSet": 1 if enabled else 0}
     if DEMO:
         for b in demo["batteries"]:
-            if b["n"] == 2:
-                b["enabled"] = params["ch2EnableSet"]
+            if b["n"] == n:
+                b["enabled"] = params[f"ch{n}EnableSet"]
     else:
         api.set_shp2(SN, params)
     reread_soon()
-    log(f"Sent DPU 2 {'resume' if enabled else 'pause'}: {params}")
+    log(f"Sent DPU {n} {'resume' if enabled else 'pause'}: {params}")
 
 
 def run_balance(s, c, now, hourly, leader, dpu1_profile):
     bats = {b["n"]: b for b in s["batteries"]}
     if 1 not in bats or 2 not in bats:
         return None
-    if not cfg["bal_held"] and bats[2]["enabled"] == 0:
-        return {"hold": False, "held": False, "mode": cfg["bal_mode"], "why": "DPU 2 is disabled in the EcoFlow app; leaving it alone"}
+    off = [n for n in (1, 2) if bats[n]["enabled"] == 0 and n != cfg["bal_paused"]]
+    if off:
+        return {"hold": 0, "held": cfg["bal_paused"], "mode": cfg["bal_mode"],
+                "why": f"DPU {off[0]} is disabled in the EcoFlow app; leaving both alone"}
     eod = now.replace(hour=23, minute=59)
     sun_hours = {(t - timedelta(hours=1)).hour for t, g in hourly if g and now < t and t - timedelta(hours=1) <= eod}
     # DPU 1's own expected solar (Wh), but only once its profile covers every daylight hour left:
@@ -383,21 +389,28 @@ def run_balance(s, c, now, hourly, leader, dpu1_profile):
     else:                        # until learned: sunlight left today (Wh/m2)
         sun_left, sun_min = (solar_wh(now, eod, hourly, 1, 1) if hourly else None), cfg["bal_sun_left_wh"]
     grid_charging = cfg["charging_by_us"] or any(b["forceCharge"] == "FORCE_CHARGE_ON" for b in bats.values())
-    hold, why = balance(bats[1]["soc"], bool(s["gridOnline"]), grid_charging, sun_left, sun_min, cfg["bal_held"], c)
-    if hold != cfg["bal_held"] and cfg["bal_mode"] != "off":
+    hold, why = balance(bats[1]["soc"], bats[2]["soc"], bool(s["gridOnline"]), grid_charging, sun_left, sun_min,
+                        cfg["bal_paused"], c)
+    if hold != cfg["bal_paused"] and cfg["bal_mode"] != "off":
         if cfg["bal_mode"] == "auto" and leader:
-            set_dpu2(not hold)
-            cfg["bal_held"] = hold
-            save_cfg()
+            if cfg["bal_paused"]:  # resume first: never both paused
+                set_dpu(cfg["bal_paused"], True)
+                cfg["bal_paused"] = 0
+                save_cfg()
+            if hold:
+                set_dpu(hold, False)
+                cfg["bal_paused"] = hold
+                save_cfg()
             log(why)
         else:
-            msg = f"[{'standby' if cfg['bal_mode'] == 'auto' else 'dry-run'}] would {'pause' if hold else 'resume'} DPU 2"
+            act = f"pause DPU {hold}" if hold else f"resume DPU {cfg['bal_paused']}"
+            msg = f"[{'standby' if cfg['bal_mode'] == 'auto' else 'dry-run'}] would {act}"
             if state.get("lastBal") != msg:
                 log(f"{msg}: {why}")
             state["lastBal"] = msg
     else:
         state["lastBal"] = None
-    return {"hold": hold, "held": cfg["bal_held"], "mode": cfg["bal_mode"], "why": why}
+    return {"hold": hold, "held": cfg["bal_paused"], "mode": cfg["bal_mode"], "why": why}
 
 
 def note_battery_use(s, now):
@@ -757,11 +770,13 @@ class Handler(BaseHTTPRequestHandler):
                             new[k] = v
                         elif k in NUMERIC:
                             v = float(v)
-                            if (v < 0 and k not in ("lat", "lon")) or (k in ("min_soc", "min_soc_cloudy", "bal_full_soc", "bal_release_soc", "outage_reserve_soc") and v > 100):
+                            if (v < 0 and k not in ("lat", "lon")) or (k in ("min_soc", "min_soc_cloudy", "bal_full_soc", "bal_release_soc", "bal_max_spread", "outage_reserve_soc") and v > 100):
                                 raise ValueError(f"{k} out of range")
                             new[k] = v
                         else:
                             raise ValueError(f"unknown or invalid setting {k}")
+                    if new["bal_max_spread"] <= 3:  # it resumes once within 3%
+                        raise ValueError("DPU spread limit must be more than 3%")
                     if new["bal_release_soc"] >= new["bal_full_soc"]:
                         raise ValueError("DPU 2 resume level must be below its pause level")
                     to_auto = new["mode"] == "auto" and cfg["mode"] != "auto"
