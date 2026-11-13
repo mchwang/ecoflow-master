@@ -65,12 +65,12 @@ class Commands(Base):
         self.assertLess(d["effective"]["min_soc"], 60)
 
     def test_frozen_panel_data_pauses_automation(self):
-        server.fetch()[0]["reportedAt"] = at(5, 55).timestamp()  # last upload 5 min before this tick
-        with self.assertRaisesRegex(RuntimeError, "frozen.*5:55 AM.*5 min ago"):
+        server.fetch()[0]["reportedAt"] = at(5, 35).timestamp()  # last upload 25 min before this tick
+        with self.assertRaisesRegex(RuntimeError, "frozen.*5:35 AM.*25 min ago"):
             server.tick(at(6))
         self.assertEqual(self.sent(), [])                          # nothing sent on stale data
         self.assertEqual(server.db.readings_since(0), [])          # and nothing recorded
-        server.fetch()[0]["reportedAt"] = at(5, 58).timestamp()  # 2 min ago: reporting normally
+        server.fetch()[0]["reportedAt"] = at(5, 45).timestamp()  # 15 min ago: the panel's normal cadence since 2026-11-13
         server.tick(at(6))
         self.assertEqual(self.sent(), [True])
 
