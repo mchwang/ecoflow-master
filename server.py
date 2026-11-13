@@ -485,7 +485,7 @@ def get_weather():
     return weather["data"]
 
 
-PANEL_STALE_S = 180  # the panel normally uploads every 9-12 s (measured 2026-11-06)
+PANEL_STALE_S = 1200  # panel uploads every 9-12 s on 2026-11-06, but only every 15 min on 2026-11-13: 15 min plus slack
 
 
 class PanelStale(RuntimeError):
