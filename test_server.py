@@ -35,9 +35,10 @@ class Base(unittest.TestCase):
         self.addCleanup(server.db.conn.close)
         server.cfg.clear()
         server.cfg.update(server.DEFAULTS, mode="auto", hold_mode="auto", margin_min=900)  # big margin: charge window open all morning
-        for k in ("leader", "holder", "lastWould", "lastBal", "onBattery", "lastHold", "unplannedCharge"):
+        for k in ("leader", "holder", "lastWould", "lastBal", "onBattery", "lastHold", "unplannedCharge", "solarReset"):
             server.state.pop(k, None)
         server.state["status"] = None
+        server.state["log"].clear()                            # log lines from one test mustn't count in the next
         p1 = mock.patch.object(server, "set_force_charge", wraps=server.set_force_charge)
         p2 = mock.patch.object(server, "set_dpu", wraps=server.set_dpu)
         p3 = mock.patch.object(server, "set_reserve", wraps=server.set_reserve)
@@ -320,6 +321,25 @@ class Commands(Base):
         server.tick(at(1, 1))
         self.dpu2.assert_called_once_with(2, False)
         self.assertEqual(server.cfg["bal_paused"], 2)
+
+    def test_unplanned_grid_charge_resets_the_panels_solar_reserve(self):
+        server.cfg.update(margin_min=30)                       # no planned grid charge at 1 AM
+        server.fetch()
+        server.demo.update(gridWatt=4000, loadWatt=500, solarWatt=0, solarReserveSoc=95)  # panel charging toward 95%
+        with mock.patch.object(server, "set_solar_reserve", wraps=server.set_solar_reserve) as sr:
+            server.tick(at(1))
+            sr.assert_called_once_with(20)                     # back to the outage reserve
+            self.assertEqual(server.demo["solarReserveSoc"], 20)
+            self.assertTrue(any("solar reserve 95% -> 20%" in l for l in server.state["log"]))
+            server.demo["solarReserveSoc"] = 95                # panel raises it again
+            server.tick(at(1, 5))
+            self.assertEqual(sr.call_count, 1)                 # at most once per 15 min (the panel's report cadence)
+            server.tick(at(1, 16))
+            self.assertEqual(sr.call_count, 2)
+            server.cfg["mode"] = "dry-run"
+            server.demo["solarReserveSoc"] = 95
+            server.tick(at(1, 40))
+            self.assertEqual(sr.call_count, 2)                 # only the copy in control on Auto sends
 
     def test_balancing_keeps_dpus_within_ten_percent(self):
         server.cfg.update(margin_min=30, bal_mode="auto")       # no grid charge at 1 AM
