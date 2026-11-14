@@ -334,6 +334,15 @@ def set_reserve(s, pct):
     reread_soon()
 
 
+def set_solar_reserve(pct):
+    params = {"solarBackupReserveSoc": int(pct)}
+    if DEMO:
+        demo["solarReserveSoc"] = params["solarBackupReserveSoc"]
+    else:
+        api.set_shp2(SN, params)
+    reread_soon()
+
+
 def run_reserve(s, hold, why, leader):
     """Hold (reserve = battery level, raised in 2% steps as it fills) or release (reserve = outage floor).
     Only the copy in control on Auto sends; any other copy releases a hold it left behind."""
@@ -427,7 +436,10 @@ def note_battery_use(s, now):
         else f"House back on grid at {hm12(now)} ({extra})")
 
 
-def note_grid_charge(s, now, ours):
+SOLAR_RESET_S = 900  # the panel may report only every 15 min: don't resend before it has shown the last write
+
+
+def note_grid_charge(s, now, ours, leader=False):
     """Warn when the battery charges from the grid without our force charge (2026-11-09: the panel topped
     up to its own 95% solar reserve after we turned force charge off, and the afternoon sun was wasted).
     Grid into battery = grid draw beyond what the house needs after solar; >500 W starts, <100 W ends."""
@@ -442,6 +454,14 @@ def note_grid_charge(s, now, ours):
     elif not on and was is not None:
         state["unplannedCharge"] = None
         log(f"Unplanned grid charge ended at {hm12(now)} (started {hm12(was)}, battery {s['soc']:.0f}%)")
+    # The panel grid-charges up to its own solar reserve, which it raises by itself (95% on 2026-11-13): set it back
+    # to the outage reserve. It may raise it again (22% -> 20% -> 22% within 9 min on 2026-11-14), so recheck.
+    floor, sr, last = cfg["outage_reserve_soc"], s.get("solarReserveSoc"), state.get("solarReset")
+    if (on and leader and cfg["mode"] == "auto" and sr is not None and sr > floor
+            and (last is None or (now - last).total_seconds() >= SOLAR_RESET_S)):
+        set_solar_reserve(floor)
+        state["solarReset"] = now
+        log(f"Set the panel's solar reserve {sr:.0f}% -> {floor:.0f}% to stop the unplanned grid charge")
 
 
 def manual_force(on, now=None):
@@ -586,7 +606,7 @@ def tick(now=None):
         run_reserve(s, hold, hold_why, leader)
         bal = run_balance(s, c, now, hourly, leader, p1)
         note_battery_use(s, now)
-        note_grid_charge(s, now, cfg["charging_by_us"])
+        note_grid_charge(s, now, cfg["charging_by_us"], leader)
         saved = refresh_savings(now, c["capacity_wh"])
         state["cap_wh"] = c["capacity_wh"]
         # Open-Meteo values are the mean of the hour ending at t, so label each bar with the hour it covers.
