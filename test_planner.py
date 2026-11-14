@@ -112,6 +112,7 @@ class Balance(unittest.TestCase):
     def test_making_room_never_drains_dpu1_far_below_dpu2(self):
         self.assertEqual(self.b(84, 88, paused=2), 2)
         self.assertEqual(self.b(83, 88, paused=2), 0)    # 5% below DPU 2: resume, well inside the 10% limit
+        self.assertEqual(self.b(90, 95), 0)              # and never pauses there (live 2026-11-13: paused/resumed every 30 s)
 
     def test_keeps_the_two_within_ten_percent(self):
         self.assertEqual(self.b(60, 51), 0)

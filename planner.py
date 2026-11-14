@@ -322,6 +322,6 @@ def balance(dpu1_soc, dpu2_soc, grid_online, grid_charging, sun_left, sun_min, p
         if gap <= -5:
             return 0, f"{levels}: DPU 1 well below DPU 2, so both run the house again"
         return 2, f"DPU 1 at {dpu1_soc:.0f}%: house runs on DPU 1 until it reaches {cfg['bal_release_soc']:.0f}%"
-    if dpu1_soc >= cfg["bal_full_soc"]:
+    if dpu1_soc >= cfg["bal_full_soc"] and gap > -5:  # same 5% as the release above, or it flaps
         return 2, f"DPU 1 nearly full ({dpu1_soc:.0f}%): pausing DPU 2 so DPU 1 makes room for afternoon sun"
     return 0, f"{levels}: within {lim:.0f}%; pauses DPU 2 when DPU 1 reaches {cfg['bal_full_soc']:.0f}%"
