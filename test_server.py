@@ -398,6 +398,12 @@ class Http(HttpServer):
         self.assertAlmostEqual(r["report"]["grid_kwh"]["off-peak"], 0.8 / 60, places=3)
         self.assertEqual(len(r["hourly"]), 24)                                     # a past day shows all hours
         self.assertEqual(self.get("/api/day?date=2026-13-40")[0], 400)
+
+    def test_state_with_times_in_it_still_loads(self):  # 2026-11-15: a grid-charge start time made /api/state a 502
+        server.state["unplannedCharge"] = at(15, 0)
+        code, r = self.get("/api/state")
+        self.assertEqual((code, r["unplannedCharge"]), (200, at(15, 0).isoformat()))
+        server.state.pop("unplannedCharge")
         self.assertEqual(self.get("/api/day?date=2026-11-04")[1]["readings"], 0)
 
     def test_rejected_save_changes_nothing(self):

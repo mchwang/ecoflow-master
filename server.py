@@ -715,7 +715,7 @@ class Handler(BaseHTTPRequestHandler):
         return False
 
     def _json(self, obj, code=200):
-        body = json.dumps(obj, default=list).encode()
+        body = json.dumps(obj, default=lambda o: o.isoformat() if isinstance(o, datetime) else list(o)).encode()  # deque, datetime
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
