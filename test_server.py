@@ -35,7 +35,7 @@ class Base(unittest.TestCase):
         self.addCleanup(server.db.conn.close)
         server.cfg.clear()
         server.cfg.update(server.DEFAULTS, mode="auto", hold_mode="auto", margin_min=900)  # big margin: charge window open all morning
-        for k in ("leader", "holder", "lastWould", "lastBal", "onBattery", "lastHold", "unplannedCharge", "solarReset", "forceSwitch", "offResent"):
+        for k in ("leader", "holder", "lastWould", "lastBal", "onBattery", "lastHold", "unplannedCharge", "solarReset", "forceSwitch", "offAt"):
             server.state.pop(k, None)
         server.state["status"] = None
         server.state["log"].clear()                            # log lines from one test mustn't count in the next
@@ -198,6 +198,11 @@ class Commands(Base):
         server.tick(at(6, 5))
         self.assertEqual(self.sent(), [True])                   # kept on
         self.assertTrue(any("Keeping force charge ON until 6:15 AM" in l for l in server.state["log"]))
+        server.db.claim_lease("other", time.time(), server.LEASE_TTL, force=True)
+        server.tick(at(6, 6))                                   # on standby: the usual "would", not "Keeping"
+        self.assertIn("[standby] would turn force charge OFF", " ".join(server.state["log"]))
+        self.assertEqual(sum("Keeping force charge" in l for l in server.state["log"]), 1)
+        server.db.claim_lease("me", time.time(), server.LEASE_TTL, force=True)
         server.tick(at(6, 15))
         self.assertEqual(self.sent(), [True, False])
         s.update(soc=10)                                        # short again right away
@@ -210,21 +215,27 @@ class Commands(Base):
         self.assertEqual(self.sent(), [True, False, True, False])
 
     def test_off_resent_while_the_panel_keeps_force_charging(self):  # 2026-11-15/16: OFF ignored, charged into peak
+        s = server.fetch()[0]
         server.tick(at(14, 50))                                 # we charge
         server.tick(at(15, 1))                                  # window over: OFF
-        stuck = lambda: [b.update(forceCharge="FORCE_CHARGE_ON") for b in server.demo["batteries"][:1]]
-        stuck()                                                 # the panel didn't take it for DPU 1
-        server.tick(at(15, 2))
+        def report(h, m):                                       # the panel's upload at h:m still shows DPU 1 on
+            s["batteries"][0]["forceCharge"] = "FORCE_CHARGE_ON"
+            s["reportedAt"] = at(h, m).timestamp()
+        report(14, 55)                                          # an upload from before our OFF: not ignored yet
+        server.tick(at(15, 7))
+        self.assertEqual(self.sent(), [True, False])
+        report(15, 6)                                           # made after our OFF: the panel ignored it
+        server.tick(at(15, 7))
         self.assertEqual(self.sent(), [True, False, False])
         self.assertTrue(any("still force charging DPU 1" in l for l in server.state["log"]))
-        stuck()
-        server.tick(at(15, 4))
-        self.assertEqual(len(self.sent()), 3)                   # not every poll
-        server.tick(at(15, 7))
+        report(15, 9)
+        server.tick(at(15, 10))
+        self.assertEqual(len(self.sent()), 3)                   # at most every 5 min
+        server.tick(at(15, 12))
         self.assertEqual(len(self.sent()), 4)
         self.assertEqual(self.panel(), ["FORCE_CHARGE_OFF"] * 2)
         server.cfg["mode"] = "dry-run"                          # only the copy in control (in Auto) sends
-        stuck()
+        report(15, 19)
         server.tick(at(15, 20))
         self.assertEqual(len(self.sent()), 4)
 
