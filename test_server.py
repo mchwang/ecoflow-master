@@ -35,7 +35,7 @@ class Base(unittest.TestCase):
         self.addCleanup(server.db.conn.close)
         server.cfg.clear()
         server.cfg.update(server.DEFAULTS, mode="auto", hold_mode="auto", margin_min=900)  # big margin: charge window open all morning
-        for k in ("leader", "holder", "lastWould", "lastBal", "onBattery", "lastHold", "unplannedCharge", "solarReset"):
+        for k in ("leader", "holder", "lastWould", "lastBal", "onBattery", "lastHold", "unplannedCharge", "solarReset", "forceSwitch", "offResent"):
             server.state.pop(k, None)
         server.state["status"] = None
         server.state["log"].clear()                            # log lines from one test mustn't count in the next
@@ -190,6 +190,43 @@ class Commands(Base):
         server.tick(at(6))
         self.assertEqual(self.reserves(), [])
         self.assertTrue(any("would hold the battery" in l for l in server.state["log"]))
+
+    def test_force_charge_switches_at_most_every_15_minutes(self):  # 2026-11-16: on/off every ~30 min, 5 min on
+        s = server.fetch()[0]
+        server.tick(at(6))                                      # short: charge
+        s.update(soc=90)                                        # 8.7 kW filled the 2% buffer in 5 min
+        server.tick(at(6, 5))
+        self.assertEqual(self.sent(), [True])                   # kept on
+        self.assertTrue(any("Keeping force charge ON until 6:15 AM" in l for l in server.state["log"]))
+        server.tick(at(6, 15))
+        self.assertEqual(self.sent(), [True, False])
+        s.update(soc=10)                                        # short again right away
+        server.tick(at(6, 20))
+        self.assertEqual(self.sent(), [True, False])            # kept off
+        server.tick(at(6, 30))
+        self.assertEqual(self.sent(), [True, False, True])
+        s.update(soc=90)
+        server.tick(at(15, 1))                                  # window over: off at once, no 15 min wait
+        self.assertEqual(self.sent(), [True, False, True, False])
+
+    def test_off_resent_while_the_panel_keeps_force_charging(self):  # 2026-11-15/16: OFF ignored, charged into peak
+        server.tick(at(14, 50))                                 # we charge
+        server.tick(at(15, 1))                                  # window over: OFF
+        stuck = lambda: [b.update(forceCharge="FORCE_CHARGE_ON") for b in server.demo["batteries"][:1]]
+        stuck()                                                 # the panel didn't take it for DPU 1
+        server.tick(at(15, 2))
+        self.assertEqual(self.sent(), [True, False, False])
+        self.assertTrue(any("still force charging DPU 1" in l for l in server.state["log"]))
+        stuck()
+        server.tick(at(15, 4))
+        self.assertEqual(len(self.sent()), 3)                   # not every poll
+        server.tick(at(15, 7))
+        self.assertEqual(len(self.sent()), 4)
+        self.assertEqual(self.panel(), ["FORCE_CHARGE_OFF"] * 2)
+        server.cfg["mode"] = "dry-run"                          # only the copy in control (in Auto) sends
+        stuck()
+        server.tick(at(15, 20))
+        self.assertEqual(len(self.sent()), 4)
 
     def test_grid_outage_stops_and_blocks_grid_charging(self):
         server.tick(at(6))                                      # charging from the grid
