@@ -313,7 +313,7 @@ def reread_soon():
     t.start()
 
 
-def set_force_charge(s, on):
+def set_force_charge(s, on, now=None):
     params = {f"ch{b['n']}ForceCharge": "FORCE_CHARGE_ON" if on else "FORCE_CHARGE_OFF" for b in s["batteries"]
               if b["enabled"] != 0 or b["n"] == cfg["bal_paused"]}  # include a DPU only we paused
     if DEMO:
@@ -321,6 +321,8 @@ def set_force_charge(s, on):
             b["forceCharge"] = params[f"ch{b['n']}ForceCharge"]
     else:
         api.set_shp2(SN, params)
+    if not on:
+        state["offAt"] = now or datetime.now(TZ)  # resend_off waits for a panel report newer than this
     reread_soon()
     log(f"Sent force charge {'ON' if on else 'OFF'}: {params}")
 
@@ -442,14 +444,14 @@ RESEND_S = 300      # how often to repeat an OFF the panel hasn't taken
 
 def resend_off(s, now, leader):
     """The panel sometimes keeps force charging after our OFF (2026-11-15/16: 8.6 kW until 95%, into peak).
-    In Auto, the copy in control sends OFF again while the panel still reports force charge ON."""
+    In Auto, the copy in control sends OFF again while the panel still reports force charge ON.
+    The panel may upload only every 15 min, so only a report made after our last OFF counts."""
     stuck = [b["n"] for b in s["batteries"]
              if b["forceCharge"] == "FORCE_CHARGE_ON" and (b["enabled"] != 0 or b["n"] == cfg["bal_paused"])]
-    times = [t for t in (state.get("offResent"), (state.get("forceSwitch") or (None,))[0]) if t is not None]
+    off, rep = state.get("offAt"), s.get("reportedAt")  # no report time in demo data: treat it as fresh
     if (stuck and leader and not cfg["charging_by_us"]  # leader: only ever a copy in Auto
-            and all((now - t).total_seconds() >= RESEND_S for t in times)):
-        set_force_charge(s, False)
-        state["offResent"] = now
+            and (off is None or ((rep is None or rep > off.timestamp()) and (now - off).total_seconds() >= RESEND_S))):
+        set_force_charge(s, False, now)
         log(f"Panel still force charging DPU {', '.join(map(str, stuck))} after our OFF: sent OFF again")
 
 
@@ -487,7 +489,7 @@ def manual_force(on, now=None):
     if state["status"] is None:
         raise ValueError("no panel data yet")
     with lock:
-        set_force_charge(state["status"], on)
+        set_force_charge(state["status"], on, now)
         cfg["charging_by_us"] = on  # what's on the panel now, so the plan compares against reality
         save_cfg()
 
@@ -614,13 +616,13 @@ def tick(now=None):
         hold_switch = (last is not None and last[1] != charge and (now - last[0]).total_seconds() < FORCE_MIN_S
                        and d["kind"] not in ("outside", "outage"))
         if mode != "off" and charge != cfg["charging_by_us"]:
-            if mode == "auto" and hold_switch:
+            if mode == "auto" and leader and hold_switch:  # a standby copy logs "would" below instead
                 msg = f"Keeping force charge {'OFF' if charge else 'ON'} until {hm12(last[0] + timedelta(seconds=FORCE_MIN_S))} (at least 15 min between switches)"
                 if state.get("lastWould") != msg:
                     log(f"{msg}: {reason}")
                 state["lastWould"] = msg
             elif mode == "auto" and (leader or own_stop):
-                set_force_charge(s, charge)
+                set_force_charge(s, charge, now)
                 cfg["charging_by_us"] = charge
                 # an outage or the window's end isn't the plan changing its mind: don't make the next switch wait
                 state["forceSwitch"] = None if d["kind"] in ("outside", "outage") else (now, charge)
