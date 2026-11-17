@@ -436,6 +436,23 @@ def note_battery_use(s, now):
         else f"House back on grid at {hm12(now)} ({extra})")
 
 
+FORCE_MIN_S = 900   # least time between our own force charge ON and OFF
+RESEND_S = 300      # how often to repeat an OFF the panel hasn't taken
+
+
+def resend_off(s, now, leader):
+    """The panel sometimes keeps force charging after our OFF (2026-11-15/16: 8.6 kW until 95%, into peak).
+    In Auto, the copy in control sends OFF again while the panel still reports force charge ON."""
+    stuck = [b["n"] for b in s["batteries"]
+             if b["forceCharge"] == "FORCE_CHARGE_ON" and (b["enabled"] != 0 or b["n"] == cfg["bal_paused"])]
+    times = [t for t in (state.get("offResent"), (state.get("forceSwitch") or (None,))[0]) if t is not None]
+    if (stuck and leader and not cfg["charging_by_us"]  # leader: only ever a copy in Auto
+            and all((now - t).total_seconds() >= RESEND_S for t in times)):
+        set_force_charge(s, False)
+        state["offResent"] = now
+        log(f"Panel still force charging DPU {', '.join(map(str, stuck))} after our OFF: sent OFF again")
+
+
 SOLAR_RESET_S = 900  # the panel may report only every 15 min: don't resend before it has shown the last write
 
 
@@ -591,10 +608,22 @@ def tick(now=None):
         # Once the cheap window is over, a copy always stops a charge it started, even on standby:
         # no copy ever wants grid charging then, so this can't fight the copy in control.
         own_stop = not charge and cfg["charging_by_us"] and d["kind"] == "outside"
+        # The panel charges at ~8.7 kW, not the planned 4 kW, so the 2% stop buffer filled in 5 min and the plan
+        # flipped on/off every half hour (2026-11-16); the panel then ignored one OFF. Keep each switch 15 min.
+        last = state.get("forceSwitch")  # (time, on) of our last automatic switch
+        hold_switch = (last is not None and last[1] != charge and (now - last[0]).total_seconds() < FORCE_MIN_S
+                       and d["kind"] not in ("outside", "outage"))
         if mode != "off" and charge != cfg["charging_by_us"]:
-            if mode == "auto" and (leader or own_stop):
+            if mode == "auto" and hold_switch:
+                msg = f"Keeping force charge {'OFF' if charge else 'ON'} until {hm12(last[0] + timedelta(seconds=FORCE_MIN_S))} (at least 15 min between switches)"
+                if state.get("lastWould") != msg:
+                    log(f"{msg}: {reason}")
+                state["lastWould"] = msg
+            elif mode == "auto" and (leader or own_stop):
                 set_force_charge(s, charge)
                 cfg["charging_by_us"] = charge
+                # an outage or the window's end isn't the plan changing its mind: don't make the next switch wait
+                state["forceSwitch"] = None if d["kind"] in ("outside", "outage") else (now, charge)
                 save_cfg()
             else:
                 msg = f"[{'standby' if mode == 'auto' else 'dry-run'}] would turn force charge {'ON' if charge else 'OFF'}"
@@ -607,6 +636,7 @@ def tick(now=None):
         bal = run_balance(s, c, now, hourly, leader, p1)
         note_battery_use(s, now)
         note_grid_charge(s, now, cfg["charging_by_us"], leader)
+        resend_off(s, now, leader)
         saved = refresh_savings(now, c["capacity_wh"])
         state["cap_wh"] = c["capacity_wh"]
         # Open-Meteo values are the mean of the hour ending at t, so label each bar with the hour it covers.
