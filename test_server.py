@@ -120,42 +120,43 @@ class Commands(Base):
         server.tick(at(21))
         self.assertEqual(len(taken()), 2); self.assertIn("House back on grid", taken()[0])
 
+    def warned(self):
+        return [l for l in server.state["log"] if "without our force charge" in l or "Unplanned grid charge ended" in l]
+
     def test_warns_when_the_panel_grid_charges_on_its_own(self):
         server.cfg["mode"] = "dry-run"                           # we never turn force charge on
         s = server.fetch()[0]
-        warned = lambda: [l for l in server.state["log"] if "without our force charge" in l or "Unplanned grid charge ended" in l]
         s.update(loadWatt=700, solarWatt=1500, gridWatt=0, soc=52, solarReserveSoc=95)
         server.tick(at(13))
-        self.assertEqual(warned(), [])                           # solar covers the house, no grid
+        self.assertEqual(self.warned(), [])                           # solar covers the house, no grid
         s.update(gridWatt=4000)                                  # 4 kW from grid, house needs none of it
         server.tick(at(13, 9)); server.tick(at(13, 10))
-        self.assertEqual(len(warned()), 1); self.assertIn("4000 W", warned()[0]); self.assertIn("solar reserve 95%", warned()[0])
+        self.assertEqual(len(self.warned()), 1); self.assertIn("4000 W", self.warned()[0]); self.assertIn("solar reserve 95%", self.warned()[0])
         s.update(gridWatt=300)                                   # tapering: still charging, no new line
         server.tick(at(14))
-        self.assertEqual(len(warned()), 1)
+        self.assertEqual(len(self.warned()), 1)
         s.update(gridWatt=0, soc=96)
         server.tick(at(14, 18))
-        self.assertEqual(len(warned()), 2); self.assertIn("started 1:09 PM", warned()[0])
+        self.assertEqual(len(self.warned()), 2); self.assertIn("started 1:09 PM", self.warned()[0])
         server.cfg["charging_by_us"] = True                      # our own charge: never a warning
         s.update(gridWatt=4000)
         server.tick(at(14, 20))
-        self.assertEqual(len(warned()), 2)
+        self.assertEqual(len(self.warned()), 2)
 
     def test_names_storm_guard_when_the_reserves_dont_explain_the_charge(self):
         server.cfg["mode"] = "dry-run"
         s = server.fetch()[0]
-        warned = lambda: [l for l in server.state["log"] if "without our force charge" in l or "Unplanned grid charge ended" in l]
         s.update(loadWatt=700, solarWatt=0, gridWatt=4800, soc=93, backupReserveSoc=50, solarReserveSoc=60,
                  stormGuard=True, maxChargeSoc=95)              # 2026-11-18
         server.tick(at(10, 45))
-        self.assertIn("Storm Guard is on", warned()[0])
+        self.assertIn("Storm Guard is on", self.warned()[0])
         s.update(gridWatt=700, soc=97)
         server.tick(at(11, 4))
-        self.assertIn("battery 97%, above the 95% max charge level", warned()[0])
+        self.assertIn("battery 97%, above the 95% max charge level", self.warned()[0])
         server.state["log"].clear()
         s.update(gridWatt=4800, soc=93, stormGuard=False)        # Storm Guard off: the old hint
         server.tick(at(12))
-        self.assertIn("Check the panel's reserve", warned()[0])
+        self.assertIn("Check the panel's reserve", self.warned()[0])
 
     def reserves(self):
         return [c.args[1] for c in self.reserve.call_args_list]
