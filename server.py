@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 
 from db import DB
 from ecoflow_api import SSL_CTX, EcoFlow
-from planner import afternoon_sun, evening_target, balance, hold_battery, daily_solar_kwh, day_report, deadline_of, decide, hourly_kwh, room_target, simulate, target_soc, hm12, fit_array_kw, fit_hourly_kw, solar_wh, solar_wh_hourly, tou_period
+from planner import OFFPEAK, afternoon_sun, evening_target, balance, hold_battery, daily_solar_kwh, day_report, deadline_of, decide, hourly_kwh, room_target, simulate, target_soc, hm12, fit_array_kw, fit_hourly_kw, solar_wh, solar_wh_hourly, tou_period
 
 HERE = Path(__file__).parent
 TZ = ZoneInfo("America/Los_Angeles")
@@ -63,8 +63,6 @@ LEASE_TTL = 300
 
 DEFAULTS = {
     "mode": "dry-run",           # off | dry-run | auto
-    "offpeak_start": "00:00",
-    "offpeak_end": "15:00",      # EV2-A part-peak starts 3pm: deadline for min_soc
     "min_soc": 60,               # battery % wanted by the deadline when the afternoon is sunny
     "min_soc_cloudy": 80,        # ...when little/no sun is forecast after the deadline (or no forecast)
     "sunny_after_wh": 300,       # forecast sunlight after the deadline (Wh/m2) that counts as "sunny"
@@ -303,7 +301,7 @@ def summarize(d):
 
 
 def effective(s):
-    c = dict(cfg)
+    c = {**cfg, **OFFPEAK}
     c["capacity_wh"] = c["capacity_wh"] or s["fullCapWh"] or DPU_WH * max(1, len(s["batteries"]))
     c["charge_w"] = c["charge_w"] or s["chargeWattPower"] or 3000
     c["max_soc"] = s["maxChargeSoc"] or 100  # panel stops charging at its max level (target_soc caps to it)
@@ -680,12 +678,13 @@ def tick(now=None):
                 state["lastWould"] = msg
         else:
             state["lastWould"] = None
+        # Safety first: a failing write below (reserve, wind, DPU pause) must not skip the OFF resend.
+        note_grid_charge(s, now, cfg["charging_by_us"], leader, floor)
+        resend_off(s, now, leader)
         run_reserve(s, hold, hold_why, leader, floor)
         run_wind(s, floor, wind, now, leader, w is not None or (cfg["lat"], cfg["lon"]) == (0, 0))  # no location: rule off
         bal = run_balance(s, c, now, hourly, leader, p1)
         note_battery_use(s, now)
-        note_grid_charge(s, now, cfg["charging_by_us"], leader, floor)
-        resend_off(s, now, leader)
         saved = refresh_savings(now, c["capacity_wh"])
         state["cap_wh"] = c["capacity_wh"]
         # Open-Meteo values are the mean of the hour ending at t, so label each bar with the hour it covers.
@@ -772,6 +771,15 @@ button{font:inherit;font-weight:600;min-height:44px;border:0;border-radius:10px;
 <button>Sign in</button></form></body></html>"""
 
 
+AUTH_FAIL = threading.Lock()
+
+
+def slow_fail():
+    """Wait 1 s after a wrong password, one at a time: parallel connections can't guess faster."""
+    with AUTH_FAIL:
+        time.sleep(1)
+
+
 def authorized(header, cookie=""):
     if not PASSWORD:
         return True  # only allowed when bound to localhost (checked at startup)
@@ -781,7 +789,11 @@ def authorized(header, cookie=""):
         user, _, pw = base64.b64decode(header.removeprefix("Basic ")).decode().partition(":")
     except Exception:
         return False
-    return hmac.compare_digest(user, USER) & hmac.compare_digest(pw, PASSWORD)
+    if hmac.compare_digest(user, USER) & hmac.compare_digest(pw, PASSWORD):
+        return True
+    if header.startswith("Basic "):  # a wrong guess (no header at all is just a first visit)
+        slow_fail()
+    return False
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -845,7 +857,7 @@ class Handler(BaseHTTPRequestHandler):
             form = urllib.parse.parse_qs(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode())
             user, pw = form.get("user", [""])[0], form.get("password", [""])[0]
             if not (hmac.compare_digest(user, USER) & hmac.compare_digest(pw, PASSWORD)):
-                time.sleep(1)  # slow down password guessing
+                slow_fail()
                 return self._login_page("Wrong username or password", 401)
             secure = "; Secure" if self.headers.get("X-Forwarded-Proto") == "https" else ""  # HTTPS via Coolify's proxy
             self.send_response(303)

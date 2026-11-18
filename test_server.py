@@ -437,6 +437,21 @@ class Commands(Base):
         server.note_grid_charge({**s, "soc": 61}, at(1, 30), False, True, 60)  # above it: a real unplanned charge
         self.assertTrue(any("Warning" in l for l in server.state["log"]))
 
+    def test_a_failing_write_still_resends_off(self):  # audit: a DPU/reserve error skipped resend_off
+        server.fetch()
+        for b in server.demo["batteries"]:
+            b["forceCharge"] = "FORCE_CHARGE_ON"               # panel ignored our OFF
+        server.state["leader"] = True                          # already in control: don't adopt the panel's ON
+        with mock.patch.object(server, "run_reserve", side_effect=RuntimeError("EcoFlow API error 1")):
+            with self.assertRaises(RuntimeError):
+                server.tick(at(17))
+        self.assertEqual(self.sent(), [False])
+
+    def test_off_peak_window_matches_the_tariff(self):
+        end = server.datetime.combine(at(0).date(), server.datetime.strptime(server.OFFPEAK["offpeak_end"], "%H:%M").time(), server.TZ)
+        self.assertEqual(server.tou_period(end - server.timedelta(minutes=1))[0], "off-peak")
+        self.assertNotEqual(server.tou_period(end)[0], "off-peak")
+
     def test_unplanned_grid_charge_resets_the_panels_solar_reserve(self):
         server.cfg.update(margin_min=30)                       # no planned grid charge at 1 AM
         server.fetch()
@@ -557,6 +572,15 @@ class SignIn(HttpServer):
         code, h, body = self.req("GET", "/")
         self.assertEqual(code, 200); self.assertIn("Sign in", body); self.assertNotIn("WWW-Authenticate", h)
         self.assertEqual(self.req("GET", "/api/state")[0], 401)
+
+    def test_wrong_basic_auth_waits(self):  # audit: only /login was slowed, and per connection
+        with mock.patch.object(server.time, "sleep") as sleep:
+            bad = "Basic " + server.base64.b64encode(b"mch:nope").decode()
+            self.assertFalse(server.authorized(bad))
+            sleep.assert_called_once_with(1)
+            self.assertFalse(server.authorized(""))          # first visit, no password sent: no wait
+            self.assertTrue(server.authorized("Basic " + server.base64.b64encode(b"mch:pw").decode()))
+            self.assertEqual(sleep.call_count, 1)
 
     def test_wrong_password_no_cookie(self):
         code, h, _ = self.login("nope")
