@@ -35,7 +35,7 @@ class Base(unittest.TestCase):
         self.addCleanup(server.db.conn.close)
         server.cfg.clear()
         server.cfg.update(server.DEFAULTS, mode="auto", hold_mode="auto", margin_min=900)  # big margin: charge window open all morning
-        for k in ("leader", "holder", "lastWould", "lastBal", "onBattery", "lastHold", "unplannedCharge", "solarReset", "forceSwitch", "offAt"):
+        for k in ("leader", "holder", "lastWould", "lastBal", "onBattery", "lastHold", "unplannedCharge", "solarReset", "forceSwitch", "offAt", "windSet"):
             server.state.pop(k, None)
         server.state["status"] = None
         server.state["log"].clear()                            # log lines from one test mustn't count in the next
@@ -369,6 +369,36 @@ class Commands(Base):
         server.tick(at(1, 1))
         self.dpu2.assert_called_once_with(2, False)
         self.assertEqual(server.cfg["bal_paused"], 2)
+
+    def test_gusts_over_20_mph_raise_the_reserves_and_calm_sets_them_back(self):
+        server.cfg.update(margin_min=30, hold_mode="dry-run", lat=1.0)
+        server.fetch()
+        windy = {"hourly": [], "sunrise": "06:38", "sunset": "17:04", "gusts": [(at(h), 21 if h == 20 else 10) for h in range(24)]}
+        calm = {**windy, "gusts": [(at(h), 20) for h in range(24)]}  # 20 is not over the limit
+        with mock.patch.object(server, "set_solar_reserve", wraps=server.set_solar_reserve) as sr:
+            with mock.patch.object(server, "get_weather", return_value=windy):
+                server.tick(at(1))
+                server.tick(at(1, 1))                          # already raised: nothing resent
+            self.assertEqual((server.demo["backupReserveSoc"], server.demo["solarReserveSoc"]), (50, 60))
+            self.assertEqual((self.reserves(), sr.call_args_list), ([50], [mock.call(60)]))
+            self.assertEqual(server.state["decision"]["battery"]["floor"], 60)
+            self.assertIn("21 mph", server.state["decision"]["battery"]["wind"])
+            self.assertTrue(server.cfg["wind_held"])
+            with mock.patch.object(server, "get_weather", return_value=calm):
+                server.tick(at(2))
+                server.tick(at(2, 1))                          # set back once, not every minute
+            self.assertEqual((server.demo["backupReserveSoc"], server.demo["solarReserveSoc"]), (20, 20))
+            self.assertEqual(self.reserves(), [50, 20])
+            self.assertFalse(server.cfg["wind_held"])
+
+    def test_wind_rule_waits_for_control(self):
+        server.cfg.update(margin_min=30, hold_mode="dry-run", lat=1.0)
+        server.db.claim_lease("other", time.time(), server.LEASE_TTL, force=True)  # another copy is in control
+        windy = {"hourly": [], "sunrise": "06:38", "sunset": "17:04", "gusts": [(at(5), 40)]}
+        with mock.patch.object(server, "get_weather", return_value=windy):
+            server.tick(at(1))
+        self.assertEqual(self.reserves(), [])
+        self.assertFalse(server.cfg["wind_held"])
 
     def test_unplanned_grid_charge_resets_the_panels_solar_reserve(self):
         server.cfg.update(margin_min=30)                       # no planned grid charge at 1 AM
