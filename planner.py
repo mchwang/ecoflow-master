@@ -18,6 +18,9 @@ def hm12(t):
     return f"{t.hour % 12 or 12}{f':{t.minute:02d}' if t.minute else ''} {'AM' if t.hour < 12 else 'PM'}"
 
 
+OFFPEAK = {"offpeak_start": "00:00", "offpeak_end": "15:00"}  # EV2-A cheap window; must match tou_period
+
+
 def tou_period(now):
     h = now.hour
     period = "peak" if 16 <= h < 21 else "part-peak" if h == 15 or h >= 21 else "off-peak"

@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 
 from db import DB
 from ecoflow_api import SSL_CTX, EcoFlow
-from planner import afternoon_sun, evening_target, balance, hold_battery, daily_solar_kwh, day_report, deadline_of, decide, hourly_kwh, room_target, simulate, target_soc, hm12, fit_array_kw, fit_hourly_kw, solar_wh, solar_wh_hourly, tou_period
+from planner import OFFPEAK, afternoon_sun, evening_target, balance, hold_battery, daily_solar_kwh, day_report, deadline_of, decide, hourly_kwh, room_target, simulate, target_soc, hm12, fit_array_kw, fit_hourly_kw, solar_wh, solar_wh_hourly, tou_period
 
 HERE = Path(__file__).parent
 TZ = ZoneInfo("America/Los_Angeles")
@@ -63,8 +63,6 @@ LEASE_TTL = 300
 
 DEFAULTS = {
     "mode": "dry-run",           # off | dry-run | auto
-    "offpeak_start": "00:00",
-    "offpeak_end": "15:00",      # EV2-A part-peak starts 3pm: deadline for min_soc
     "min_soc": 60,               # battery % wanted by the deadline when the afternoon is sunny
     "min_soc_cloudy": 80,        # ...when little/no sun is forecast after the deadline (or no forecast)
     "sunny_after_wh": 300,       # forecast sunlight after the deadline (Wh/m2) that counts as "sunny"
@@ -90,8 +88,11 @@ DEFAULTS = {
                                  # 4 kW (it tops up to the reserve), so it stays log-only until a safe method is verified
     "outage_reserve_soc": 20,    # % always kept for outages (the reserve when the battery is released)
     "reserve_held": None,        # reserve % we set to hold the battery (persisted, so we always release it)
+    "wind_gust_mph": 20,         # a forecast gust above this in the next 24 h counts as outage risk...
+    "wind_reserve_soc": 60,      # ...and raises the outage reserve to this %
+    "wind_held": False,          # we raised the panel's reserves for wind (persisted, so we always set them back)
 }
-NUMERIC = {"outage_reserve_soc", "bal_dpu1_left_wh", "bal_full_soc", "bal_release_soc", "bal_sun_left_wh", "bal_max_spread", "min_soc", "min_soc_cloudy", "sunny_after_wh", "lat", "lon", "pv_kw", "pv_pr", "capacity_wh", "charge_w", "margin_min"}
+NUMERIC = {"outage_reserve_soc", "wind_gust_mph", "wind_reserve_soc", "bal_dpu1_left_wh", "bal_full_soc", "bal_release_soc", "bal_sun_left_wh", "bal_max_spread", "min_soc", "min_soc_cloudy", "sunny_after_wh", "lat", "lon", "pv_kw", "pv_pr", "capacity_wh", "charge_w", "margin_min"}
 
 _saved = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
 cfg = {k: _saved.get(k, v) for k, v in DEFAULTS.items()}  # drops settings from older versions
@@ -300,7 +301,7 @@ def summarize(d):
 
 
 def effective(s):
-    c = dict(cfg)
+    c = {**cfg, **OFFPEAK}
     c["capacity_wh"] = c["capacity_wh"] or s["fullCapWh"] or DPU_WH * max(1, len(s["batteries"]))
     c["charge_w"] = c["charge_w"] or s["chargeWattPower"] or 3000
     c["max_soc"] = s["maxChargeSoc"] or 100  # panel stops charging at its max level (target_soc caps to it)
@@ -345,10 +346,10 @@ def set_solar_reserve(pct):
     reread_soon()
 
 
-def run_reserve(s, hold, why, leader):
+def run_reserve(s, hold, why, leader, floor=None):
     """Hold (reserve = battery level, raised in 2% steps as it fills) or release (reserve = outage floor).
     Only the copy in control on Auto sends; any other copy releases a hold it left behind."""
-    floor, held = cfg["outage_reserve_soc"], cfg["reserve_held"]
+    floor, held = cfg["outage_reserve_soc"] if floor is None else floor, cfg["reserve_held"]
     want = max(floor, round(s["soc"])) if hold else None
     if cfg["mode"] == "auto" and cfg["hold_mode"] == "auto" and leader:
         if want is None and held is not None:
@@ -458,14 +459,15 @@ def resend_off(s, now, leader):
 SOLAR_RESET_S = 900  # the panel may report only every 15 min: don't resend before it has shown the last write
 
 
-def note_grid_charge(s, now, ours, leader=False):
+def note_grid_charge(s, now, ours, leader=False, floor=None):
     """Warn when the battery charges from the grid without our force charge (2026-11-09: the panel topped
     up to its own 95% solar reserve after we turned force charge off, and the afternoon sun was wasted).
     Grid into battery = grid draw beyond what the house needs after solar; >500 W starts, <100 W ends."""
     into = (s["gridWatt"] or 0) - max(0, (s["loadWatt"] or 0) - (s["solarWatt"] or 0))
-    was = state.get("unplannedCharge")
+    was, floor = state.get("unplannedCharge"), cfg["outage_reserve_soc"] if floor is None else floor
     on = not ours and bool(s["gridOnline"]) and (into > 500 or (was is not None and into >= 100))
-    if on and was is None:
+    # While wind holds the reserves up, the panel grid-charging to the wind reserve is the plan, not a fault.
+    if on and was is None and not (cfg["wind_held"] and s["soc"] < floor):
         state["unplannedCharge"] = now
         log(f"Warning: the panel is charging the battery from the grid without our force charge ({into:.0f} W; battery "
             f"{s['soc']:.0f}%, backup reserve {s.get('backupReserveSoc') or 0:.0f}%, solar reserve {s.get('solarReserveSoc') or 0:.0f}%). "
@@ -475,12 +477,52 @@ def note_grid_charge(s, now, ours, leader=False):
         log(f"Unplanned grid charge ended at {hm12(now)} (started {hm12(was)}, battery {s['soc']:.0f}%)")
     # The panel grid-charges up to its own solar reserve, which it raises by itself (95% on 2026-11-13): set it back
     # to the outage reserve. It may raise it again (22% -> 20% -> 22% within 9 min on 2026-11-14), so recheck.
-    floor, sr, last = cfg["outage_reserve_soc"], s.get("solarReserveSoc"), state.get("solarReset")
+    sr, last = s.get("solarReserveSoc"), state.get("solarReset")
     if (on and leader and cfg["mode"] == "auto" and sr is not None and sr > floor
             and (last is None or (now - last).total_seconds() >= SOLAR_RESET_S)):
         set_solar_reserve(floor)
         state["solarReset"] = now
         log(f"Set the panel's solar reserve {sr:.0f}% -> {floor:.0f}% to stop the unplanned grid charge")
+
+
+PANEL_MAX_RESERVE = 50  # backupReserveSoc 60 read back as 50 twice on 2026-11-18: the panel's limit
+
+
+def outage_floor(now, w):
+    """The outage reserve: the wind reserve while a gust above the limit is forecast in the next 24 h."""
+    peak = max((g for t, g in (w or {}).get("gusts", []) if g is not None and now < t <= now + timedelta(hours=24)), default=0)
+    if peak > cfg["wind_gust_mph"]:
+        return max(cfg["outage_reserve_soc"], cfg["wind_reserve_soc"]), f"gusts to {peak:.0f} mph forecast in the next 24 h"
+    return cfg["outage_reserve_soc"], None
+
+
+def run_wind(s, floor, wind, now, leader, known):
+    """Wind: raise the panel's backup reserve (the house stops using the battery there; max 50%) and solar reserve
+    (the panel grid-charges up to it) to the wind reserve. Calm: set both back to the outage reserve, once.
+    Only the copy in control on Auto raises; any copy sets back what it raised (like run_reserve), but only
+    on a known calm forecast: with none loaded yet (restart during an Open-Meteo outage) it keeps them."""
+    backup, last = min(floor, PANEL_MAX_RESERVE), state.get("windSet")
+    if wind and leader and cfg["mode"] == "auto":
+        low_b = cfg["reserve_held"] is None and (s.get("backupReserveSoc") or 0) < backup  # a hold already sits above
+        low_s = (s.get("solarReserveSoc") or 0) < floor
+        if (low_b or low_s) and (last is None or (now - last).total_seconds() >= SOLAR_RESET_S):
+            if low_b:
+                set_reserve(s, backup)
+            if low_s:
+                set_solar_reserve(floor)
+            state["windSet"] = now
+            cfg["wind_held"] = True
+            save_cfg()
+            log(f"Wind: set the panel's backup reserve to {backup:.0f}% and solar reserve to {floor:.0f}% ({wind})")
+    elif not wind and known and cfg["wind_held"]:
+        if cfg["reserve_held"] is None:
+            set_reserve(s, floor)
+        if (s.get("solarReserveSoc") or 0) > floor:
+            set_solar_reserve(floor)
+        state["windSet"] = None
+        cfg["wind_held"] = False
+        save_cfg()
+        log(f"Wind has passed: set the panel's backup and solar reserves back to {floor:.0f}%")
 
 
 def manual_force(on, now=None):
@@ -518,7 +560,8 @@ def get_weather():
         url = "https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode({
             "latitude": cfg["lat"], "longitude": cfg["lon"], "timezone": "America/Los_Angeles",
             "past_days": 1, "forecast_days": 2,  # past hours come back as Open-Meteo's after-the-fact estimate
-            "hourly": "shortwave_radiation,direct_radiation,diffuse_radiation,cloud_cover,temperature_2m",
+            "hourly": "shortwave_radiation,direct_radiation,diffuse_radiation,cloud_cover,temperature_2m,wind_gusts_10m",
+            "wind_speed_unit": "mph",
             "daily": "sunrise,sunset"})
         try:
             with urllib.request.urlopen(url, timeout=20, context=SSL_CTX) as r:
@@ -531,6 +574,7 @@ def get_weather():
             i = d["daily"]["time"].index(today) if today in d["daily"]["time"] else 0
             weather.update(at=time.time(), key=key, error=None, data={
                 "hourly": list(zip(times, h["shortwave_radiation"], h["cloud_cover"])),
+                "gusts": list(zip(times, h["wind_gusts_10m"])),
                 "sunrise": d["daily"]["sunrise"][i][11:], "sunset": d["daily"]["sunset"][i][11:]})
         except Exception as e:  # keep the last forecast; with none, solar counts as 0 (charges more, never less)
             weather.update(at=time.time(), error=f"Weather: {type(e).__name__}: {e}")
@@ -584,7 +628,7 @@ def tick(now=None):
         # The panel runs the house from the battery at any hour (down to its backup reserve), so simulate that
         # instead of assuming all solar is stored; and leave room at the deadline for the afternoon's spare sun.
         loads, load_now = load_profile(now), s["loadWatt"] or 0
-        floor = cfg["outage_reserve_soc"]  # the panel's own reserve moves while we hold the battery
+        floor, wind = outage_floor(now, w)  # the panel's own reserve moves while we hold the battery
         model = (hourly, profile, fallback_kw, loads, load_now, c["capacity_wh"], floor, c["max_soc"])
         if loads:  # without a learned load the fixed target stays (one live reading is too noisy for the evening)
             want = c["min_soc"]
@@ -634,11 +678,13 @@ def tick(now=None):
                 state["lastWould"] = msg
         else:
             state["lastWould"] = None
-        run_reserve(s, hold, hold_why, leader)
+        # Safety first: a failing write below (reserve, wind, DPU pause) must not skip the OFF resend.
+        note_grid_charge(s, now, cfg["charging_by_us"], leader, floor)
+        resend_off(s, now, leader)
+        run_reserve(s, hold, hold_why, leader, floor)
+        run_wind(s, floor, wind, now, leader, w is not None or (cfg["lat"], cfg["lon"]) == (0, 0))  # no location: rule off
         bal = run_balance(s, c, now, hourly, leader, p1)
         note_battery_use(s, now)
-        note_grid_charge(s, now, cfg["charging_by_us"], leader)
-        resend_off(s, now, leader)
         saved = refresh_savings(now, c["capacity_wh"])
         state["cap_wh"] = c["capacity_wh"]
         # Open-Meteo values are the mean of the hour ending at t, so label each bar with the hour it covers.
@@ -662,7 +708,7 @@ def tick(now=None):
             "homeKwh": round(sim["home_wh"] / 1000, 1), "wastedKwh": round(sim["wasted_wh"] / 1000, 1),
             "sunrise": w and w["sunrise"], "sunset": w and w["sunset"], "forecast": forecast,
             "period": period, "season": season, "price": price, "effective": c,
-            "battery": {"hold": hold, "why": hold_why, "reserve": cfg["reserve_held"], "floor": floor, "mode": cfg["hold_mode"]},
+            "battery": {"hold": hold, "why": hold_why, "reserve": cfg["reserve_held"], "floor": floor, "wind": wind, "mode": cfg["hold_mode"]},
         }, savings=saved, balance=bal, control={"instance": INSTANCE, "holder": state.get("holder"), "leader": leader,
                     "referee": LEADER_URL or "this copy", "error": state.get("leaseError")})
 
@@ -725,6 +771,15 @@ button{font:inherit;font-weight:600;min-height:44px;border:0;border-radius:10px;
 <button>Sign in</button></form></body></html>"""
 
 
+AUTH_FAIL = threading.Lock()
+
+
+def slow_fail():
+    """Wait 1 s after a wrong password, one at a time: parallel connections can't guess faster."""
+    with AUTH_FAIL:
+        time.sleep(1)
+
+
 def authorized(header, cookie=""):
     if not PASSWORD:
         return True  # only allowed when bound to localhost (checked at startup)
@@ -734,7 +789,11 @@ def authorized(header, cookie=""):
         user, _, pw = base64.b64decode(header.removeprefix("Basic ")).decode().partition(":")
     except Exception:
         return False
-    return hmac.compare_digest(user, USER) & hmac.compare_digest(pw, PASSWORD)
+    if hmac.compare_digest(user, USER) & hmac.compare_digest(pw, PASSWORD):
+        return True
+    if header.startswith("Basic "):  # a wrong guess (no header at all is just a first visit)
+        slow_fail()
+    return False
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -798,7 +857,7 @@ class Handler(BaseHTTPRequestHandler):
             form = urllib.parse.parse_qs(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode())
             user, pw = form.get("user", [""])[0], form.get("password", [""])[0]
             if not (hmac.compare_digest(user, USER) & hmac.compare_digest(pw, PASSWORD)):
-                time.sleep(1)  # slow down password guessing
+                slow_fail()
                 return self._login_page("Wrong username or password", 401)
             secure = "; Secure" if self.headers.get("X-Forwarded-Proto") == "https" else ""  # HTTPS via Coolify's proxy
             self.send_response(303)
@@ -822,7 +881,7 @@ class Handler(BaseHTTPRequestHandler):
                             new[k] = v
                         elif k in NUMERIC:
                             v = float(v)
-                            if (v < 0 and k not in ("lat", "lon")) or (k in ("min_soc", "min_soc_cloudy", "bal_full_soc", "bal_release_soc", "bal_max_spread", "outage_reserve_soc") and v > 100):
+                            if (v < 0 and k not in ("lat", "lon")) or (k in ("min_soc", "min_soc_cloudy", "bal_full_soc", "bal_release_soc", "bal_max_spread", "outage_reserve_soc", "wind_reserve_soc") and v > 100):
                                 raise ValueError(f"{k} out of range")
                             new[k] = v
                         else:
