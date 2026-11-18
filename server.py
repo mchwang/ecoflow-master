@@ -681,7 +681,7 @@ def tick(now=None):
         else:
             state["lastWould"] = None
         run_reserve(s, hold, hold_why, leader, floor)
-        run_wind(s, floor, wind, now, leader, w is not None)
+        run_wind(s, floor, wind, now, leader, w is not None or (cfg["lat"], cfg["lon"]) == (0, 0))  # no location: rule off
         bal = run_balance(s, c, now, hourly, leader, p1)
         note_battery_use(s, now)
         note_grid_charge(s, now, cfg["charging_by_us"], leader, floor)

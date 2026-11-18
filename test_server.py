@@ -391,6 +391,20 @@ class Commands(Base):
             self.assertEqual(self.reserves(), [50, 20])
             self.assertFalse(server.cfg["wind_held"])
 
+    def test_wind_counts_only_the_next_24_hours(self):  # the forecast also holds yesterday's gusts (past_days=1)
+        w = {"gusts": [(at(11), 40), (at(13, day=7), 40)]}     # 1 h ago and 25 h ahead
+        self.assertEqual(server.outage_floor(at(12), w), (20, None))
+        self.assertEqual(server.outage_floor(at(12), {"gusts": [(at(13), 21)]})[0], 60)
+
+    def test_clearing_the_location_sets_wind_reserves_back(self):
+        server.cfg.update(margin_min=30, hold_mode="dry-run", lat=1.0)
+        server.fetch()
+        with mock.patch.object(server, "get_weather", return_value={"hourly": [], "sunrise": "06:38", "sunset": "17:04", "gusts": [(at(5), 40)]}):
+            server.tick(at(1))
+        server.cfg.update(lat=0.0, lon=0.0)
+        server.tick(at(2))                                     # no location: no forecast, and the rule is off
+        self.assertEqual((server.demo["backupReserveSoc"], server.demo["solarReserveSoc"]), (20, 20))
+
     def test_wind_rule_waits_for_control(self):
         server.cfg.update(margin_min=30, hold_mode="dry-run", lat=1.0)
         server.db.claim_lease("other", time.time(), server.LEASE_TTL, force=True)  # another copy is in control
