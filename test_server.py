@@ -400,6 +400,29 @@ class Commands(Base):
         self.assertEqual(self.reserves(), [])
         self.assertFalse(server.cfg["wind_held"])
 
+    def test_wind_reserves_set_back_after_losing_control(self):  # review: they stayed at 60% for good
+        server.cfg.update(margin_min=30, hold_mode="dry-run", lat=1.0)
+        server.fetch()
+        windy = {"hourly": [], "sunrise": "06:38", "sunset": "17:04", "gusts": [(at(5), 40)]}
+        with mock.patch.object(server, "get_weather", return_value=windy):
+            server.tick(at(1))
+        server.db.claim_lease("other", time.time(), server.LEASE_TTL, force=True)  # another copy takes control
+        with mock.patch.object(server, "get_weather", return_value=None):          # restart, no forecast yet
+            server.tick(at(2))
+        self.assertEqual((server.demo["backupReserveSoc"], server.demo["solarReserveSoc"]), (50, 60))  # kept
+        with mock.patch.object(server, "get_weather", return_value={**windy, "gusts": [(at(5), 5)]}):
+            server.tick(at(3))
+        self.assertEqual((server.demo["backupReserveSoc"], server.demo["solarReserveSoc"]), (20, 20))
+        self.assertFalse(server.cfg["wind_held"])
+
+    def test_grid_charge_to_the_wind_reserve_is_not_a_warning(self):
+        server.cfg.update(wind_held=True)
+        s = {"gridWatt": 4000, "loadWatt": 500, "solarWatt": 0, "gridOnline": 1, "soc": 55, "solarReserveSoc": 60}
+        server.note_grid_charge(s, at(1), False, True, 60)
+        self.assertFalse(any("Warning" in l for l in server.state["log"]))
+        server.note_grid_charge({**s, "soc": 61}, at(1, 30), False, True, 60)  # above it: a real unplanned charge
+        self.assertTrue(any("Warning" in l for l in server.state["log"]))
+
     def test_unplanned_grid_charge_resets_the_panels_solar_reserve(self):
         server.cfg.update(margin_min=30)                       # no planned grid charge at 1 AM
         server.fetch()

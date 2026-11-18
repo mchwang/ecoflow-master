@@ -466,9 +466,10 @@ def note_grid_charge(s, now, ours, leader=False, floor=None):
     up to its own 95% solar reserve after we turned force charge off, and the afternoon sun was wasted).
     Grid into battery = grid draw beyond what the house needs after solar; >500 W starts, <100 W ends."""
     into = (s["gridWatt"] or 0) - max(0, (s["loadWatt"] or 0) - (s["solarWatt"] or 0))
-    was = state.get("unplannedCharge")
+    was, floor = state.get("unplannedCharge"), cfg["outage_reserve_soc"] if floor is None else floor
     on = not ours and bool(s["gridOnline"]) and (into > 500 or (was is not None and into >= 100))
-    if on and was is None:
+    # While wind holds the reserves up, the panel grid-charging to the wind reserve is the plan, not a fault.
+    if on and was is None and not (cfg["wind_held"] and s["soc"] < floor):
         state["unplannedCharge"] = now
         log(f"Warning: the panel is charging the battery from the grid without our force charge ({into:.0f} W; battery "
             f"{s['soc']:.0f}%, backup reserve {s.get('backupReserveSoc') or 0:.0f}%, solar reserve {s.get('solarReserveSoc') or 0:.0f}%). "
@@ -478,7 +479,6 @@ def note_grid_charge(s, now, ours, leader=False, floor=None):
         log(f"Unplanned grid charge ended at {hm12(now)} (started {hm12(was)}, battery {s['soc']:.0f}%)")
     # The panel grid-charges up to its own solar reserve, which it raises by itself (95% on 2026-11-13): set it back
     # to the outage reserve. It may raise it again (22% -> 20% -> 22% within 9 min on 2026-11-14), so recheck.
-    floor = cfg["outage_reserve_soc"] if floor is None else floor
     sr, last = s.get("solarReserveSoc"), state.get("solarReset")
     if (on and leader and cfg["mode"] == "auto" and sr is not None and sr > floor
             and (last is None or (now - last).total_seconds() >= SOLAR_RESET_S)):
@@ -498,13 +498,13 @@ def outage_floor(now, w):
     return cfg["outage_reserve_soc"], None
 
 
-def run_wind(s, floor, wind, now, leader):
+def run_wind(s, floor, wind, now, leader, known):
     """Wind: raise the panel's backup reserve (the house stops using the battery there; max 50%) and solar reserve
-    (the panel grid-charges up to it) to the wind reserve. Calm: set both back to the outage reserve, once."""
-    if not (leader and cfg["mode"] == "auto"):
-        return
+    (the panel grid-charges up to it) to the wind reserve. Calm: set both back to the outage reserve, once.
+    Only the copy in control on Auto raises; any copy sets back what it raised (like run_reserve), but only
+    on a known calm forecast: with none loaded yet (restart during an Open-Meteo outage) it keeps them."""
     backup, last = min(floor, PANEL_MAX_RESERVE), state.get("windSet")
-    if wind:
+    if wind and leader and cfg["mode"] == "auto":
         low_b = cfg["reserve_held"] is None and (s.get("backupReserveSoc") or 0) < backup  # a hold already sits above
         low_s = (s.get("solarReserveSoc") or 0) < floor
         if (low_b or low_s) and (last is None or (now - last).total_seconds() >= SOLAR_RESET_S):
@@ -516,7 +516,7 @@ def run_wind(s, floor, wind, now, leader):
             cfg["wind_held"] = True
             save_cfg()
             log(f"Wind: set the panel's backup reserve to {backup:.0f}% and solar reserve to {floor:.0f}% ({wind})")
-    elif cfg["wind_held"]:
+    elif not wind and known and cfg["wind_held"]:
         if cfg["reserve_held"] is None:
             set_reserve(s, floor)
         if (s.get("solarReserveSoc") or 0) > floor:
@@ -681,7 +681,7 @@ def tick(now=None):
         else:
             state["lastWould"] = None
         run_reserve(s, hold, hold_why, leader, floor)
-        run_wind(s, floor, wind, now, leader)
+        run_wind(s, floor, wind, now, leader, w is not None)
         bal = run_balance(s, c, now, hourly, leader, p1)
         note_battery_use(s, now)
         note_grid_charge(s, now, cfg["charging_by_us"], leader, floor)
