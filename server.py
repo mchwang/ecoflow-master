@@ -469,12 +469,19 @@ def note_grid_charge(s, now, ours, leader=False, floor=None):
     # While wind holds the reserves up, the panel grid-charging to the wind reserve is the plan, not a fault.
     if on and was is None and not (cfg["wind_held"] and s["soc"] < floor):
         state["unplannedCharge"] = now
+        br, sr = s.get("backupReserveSoc") or 0, s.get("solarReserveSoc") or 0
+        # 2026-11-18: 93% -> 97% past the 95% max with both reserves far below and Storm Guard on (gusts forecast)
+        hint = ("Storm Guard is on and the reserves don't explain it: Storm Guard charges to full for a forecast storm, "
+                "past the max charge level. Turn it off in the EcoFlow app to stop this"
+                if s.get("stormGuard") and s["soc"] >= max(br, sr) else
+                "Check the panel's reserve and backup-mode settings in the EcoFlow app")
         log(f"Warning: the panel is charging the battery from the grid without our force charge ({into:.0f} W; battery "
-            f"{s['soc']:.0f}%, backup reserve {s.get('backupReserveSoc') or 0:.0f}%, solar reserve {s.get('solarReserveSoc') or 0:.0f}%). "
-            "Check the panel's reserve and backup-mode settings in the EcoFlow app")
+            f"{s['soc']:.0f}%, backup reserve {br:.0f}%, solar reserve {sr:.0f}%). {hint}")
     elif not on and was is not None:
         state["unplannedCharge"] = None
-        log(f"Unplanned grid charge ended at {hm12(now)} (started {hm12(was)}, battery {s['soc']:.0f}%)")
+        mx = s.get("maxChargeSoc")
+        over = f", above the {mx:.0f}% max charge level" if mx and s["soc"] > mx else ""
+        log(f"Unplanned grid charge ended at {hm12(now)} (started {hm12(was)}, battery {s['soc']:.0f}%{over})")
     # The panel grid-charges up to its own solar reserve, which it raises by itself (95% on 2026-11-13): set it back
     # to the outage reserve. It may raise it again (22% -> 20% -> 22% within 9 min on 2026-11-14), so recheck.
     sr, last = s.get("solarReserveSoc"), state.get("solarReset")
