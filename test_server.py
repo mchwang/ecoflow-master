@@ -636,9 +636,13 @@ class SignIn(HttpServer):
     def test_no_password_refuses_requests_through_a_proxy(self):  # audit: 127.0.0.1 behind Caddy/nginx was open
         server.PASSWORD = ""
         self.assertEqual(self.req("GET", "/api/state")[0], 200)                                     # same machine
-        self.assertEqual(self.req("GET", "/api/state", headers={"X-Forwarded-For": "1.2.3.4"})[0], 401)
+        for proxy in ({"X-Forwarded-For": "1.2.3.4"}, {"Forwarded": "for=1.2.3.4"}, {"X-Real-IP": "1.2.3.4"}):  # review
+            self.assertEqual(self.req("GET", "/api/state", headers=proxy)[0], 401, proxy)
         self.assertEqual(self.req("POST", "/api/force", '{"on": true}', {"Content-Type": "application/json",
                                                                          "X-Forwarded-For": "1.2.3.4"})[0], 401)
+        with mock.patch.object(server.time, "sleep") as sleep:  # review: said "wrong password" when none is set
+            code, _, body = self.login("", {"X-Forwarded-For": "1.2.3.4"})
+        self.assertEqual(code, 401); self.assertIn("DASHBOARD_PASSWORD", body); sleep.assert_not_called()
 
     def test_expired_or_old_password_session_rejected(self):
         old = "hp_session=" + server.make_session(now=time.time() - 400 * 86400)

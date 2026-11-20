@@ -781,6 +781,7 @@ button{font:inherit;font-weight:600;min-height:44px;border:0;border-radius:10px;
 <button>Sign in</button></form></body></html>"""
 
 
+NO_PASSWORD = "Set DASHBOARD_PASSWORD to use this through a proxy or another device, then restart the app."
 AUTH_FAIL = threading.Lock()
 
 
@@ -816,7 +817,9 @@ def authorized(header, cookie="", proxied=False):
 class Handler(BaseHTTPRequestHandler):
     def _signed_in(self):
         h = self.headers
-        return authorized(h.get("Authorization", ""), h.get("Cookie", ""), proxied="X-Forwarded-For" in h)
+        # Proxies name the client in one of these; a bare nginx proxy_pass adds none, hence the README's password rule.
+        proxied = any(k in h for k in ("X-Forwarded-For", "Forwarded", "X-Real-IP"))
+        return authorized(h.get("Authorization", ""), h.get("Cookie", ""), proxied)
 
     def _auth(self):
         if self._signed_in():
@@ -844,7 +847,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/healthz":  # unauthenticated, for Coolify's health check
             return self._json({"ok": True})
         if self.path == "/" and not self._signed_in():
-            return self._login_page()  # a sign-in page (sets a cookie) instead of the browser's basic-auth popup
+            return self._login_page("" if PASSWORD else NO_PASSWORD)  # a sign-in page (sets a cookie) instead of the browser's basic-auth popup
         if not self._auth():
             return
         if self.path == "/":
@@ -877,7 +880,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/login":
             form = urllib.parse.parse_qs(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode())
             user, pw = form.get("user", [""])[0], form.get("password", [""])[0]
-            if not PASSWORD or not matches(user, pw):  # no password set: nothing to sign in to (proxied requests stay out)
+            if not PASSWORD:  # only reached through a proxy: there's nothing to sign in with
+                return self._login_page(NO_PASSWORD, 401)
+            if not matches(user, pw):
                 slow_fail()
                 return self._login_page("Wrong username or password", 401)
             secure = "; Secure" if self.headers.get("X-Forwarded-Proto") == "https" else ""  # HTTPS via Coolify's proxy
