@@ -574,7 +574,8 @@ async function refresh() {
   if (!dayPick) loadDay(null);  // following today: refresh it with every poll
 
   if (d) {
-    const e = d.effective, cls = { 'peak':'bad', 'part-peak':'warn', 'off-peak':'ok' }[d.period];
+    const e = { ...d.effective, min_soc: Math.round(d.effective.min_soc) },  // the evening target is computed, so it has decimals
+          cls = { 'peak':'bad', 'part-peak':'warn', 'off-peak':'ok' }[d.period];
     $('tou').innerHTML = `<span class="dot ${cls}"></span>${icon('dollar')}${d.period} · $${d.price.toFixed(3)}/kWh · ${d.season}`;
     $('sbadge').style.setProperty('--c', d.kind === 'outage' ? 'var(--low)' : d.charge || d.startAt ? 'var(--warn)' : 'var(--ok)');
     $('sbadge').classList.toggle('glow', !!d.charge);
