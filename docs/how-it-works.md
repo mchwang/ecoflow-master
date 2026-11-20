@@ -1,0 +1,70 @@
+# How it works
+
+The details behind each automation, with the panel behaviour that shaped them. The [README](../README.md) covers setup.
+
+## Smart charging
+
+The automation works like this: it reads the hourly sunlight forecast from [Open-Meteo](https://open-meteo.com), which is free and needs no key. The forecast already reflects cloud cover and drops to zero after sunset. From it, the planner estimates how much solar will reach the batteries before 3 pm, when part-peak starts. If the predicted level at 3 pm is below the minimum (**60%**, or **80%** when the forecast shows little sun after 3 pm, under 300 Wh/m²; both adjustable), it turns on SHP2 **force charge** (`chNForceCharge`) just long enough to cover the shortfall. It never grid-charges during part-peak or peak.
+
+The panel runs the house from the battery at any hour (down to its backup reserve), so the prediction is an hour-by-hour simulation: solar goes in, the house's usual load for that hour (learned from the last 14 days) comes out, and solar above the panel's max charge level counts as wasted. The grid charge starts as late as possible and pauses if the sun moves that time later. If the spare sun after 3 pm (beyond what the house uses) would overfill the battery, the 3 pm target is lowered so that sun fits.
+
+## Battery hold (discharge control)
+
+The panel never runs the house from the battery below its backup reserve, so the app sets that reserve (`backupReserveSoc`, sent with `PD303_APP_SET`; tested on the panel 2026-11-06). Off-peak it **holds** the battery (reserve = current level, raised in 2% steps as solar fills it), because running the house from the battery and refilling it from the grid costs ~10% more than grid power directly. It **releases** it (reserve = the Outage reserve setting, default 20%) from 3 pm, in a grid outage, or when holding would waste solar before 3 pm (forecast overflow above 0.2 kWh; back to holding below 0.05 kWh). Only the copy in control on Auto sends; any other copy releases a hold it left. Set the panel's operating mode to Self-powered. **Caution:** the panel tops the battery up from the grid (at its 4 kW AC charge rate) whenever the battery is below the reserve, so a reserve at the current level started an unplanned grid charge (2026-11-06). Battery hold therefore has its own mode (Settings, default Dry-run) and stays log-only until a safe hold method is verified. Set your latitude/longitude and array size on the dashboard; until then solar counts as 0.
+
+## Wind reserve
+
+High wind raises the risk of a power outage. When the forecast (Open-Meteo, the same location as the solar forecast) has a gust over 20 mph in the next 24 hours, the outage reserve becomes 60%. The copy in control on Auto then sets the panel's backup reserve to 50% and its solar reserve to 60%. The backup reserve stays at 50% because the panel stored 50% when sent 60% (2026-11-18). The house stops drawing from the battery at the backup reserve, and the panel charges from the grid up to the solar reserve, even at peak price. When the forecast is calm again, the app sets both back to the outage reserve, once. Both numbers are settings (`wind_gust_mph`, `wind_reserve_soc`). With no location set, there is no wind forecast and the rule is off.
+
+## Unplanned grid charging
+
+The panel can also charge from the grid on its own, for example up to its solar reserve (on 2026-11-09 it kept charging to 96% after the app turned force charge off, and the afternoon sun was wasted). Whenever more than 500 W goes from the grid into the battery without the app's force charge, Activity shows a warning with the panel's backup and solar reserves, and a second line when it ends. The copy in control on Auto then sets the panel's solar reserve (`solarBackupReserveSoc`) back to the Outage reserve, which stops that charge. The panel raises this reserve by itself (95% on 2026-11-13; 20% set on 2026-11-14 went back to 22% within 9 minutes), so the app resends it at most once per 15 minutes while the unplanned charge lasts. The cleaner fix is to turn off whatever panel feature manages the solar reserve in the EcoFlow app. The panel can also ignore the app's force charge OFF: on 2026-11-15 and 2026-11-16 it kept charging at about 8.6 kW until 95%, into peak. While the panel still reports force charge ON in a report made after the app turned it off, the copy in control on Auto sends OFF again, at most every 5 minutes. Older reports don't count: the panel may upload only every 15 minutes.
+
+## Switching force charge
+
+The panel charges at about 8.7 kW, twice the planned 4 kW, so the plan's 2% stop buffer filled in about 5 minutes and the app switched force charge on and off every half hour (2026-11-16). The app now keeps each automatic switch for at least 15 minutes. An outage or the end of the off-peak window still stops a charge at once.
+
+## DPU balancing
+
+The app keeps the two DPUs within 10% of each other (setting: Max difference between DPUs). When one is 10% fuller, it pauses the other with the panel's battery enable switch (`ch1EnableSet` / `ch2EnableSet`), so the house drains the fuller one until they are within 3%. A paused DPU still charges from its own solar. Separately, while DPU 1 (the larger battery, which gets the afternoon sun) is nearly full (90%), the app pauses DPU 2 so the house drains DPU 1 first and makes room for its afternoon solar. DPU 2 resumes when DPU 1 drops to 75% or falls 5% below DPU 2, or when little sunlight is left today. Both rules let go when the grid goes down or grid charging starts, only one DPU is ever paused, and the app only resumes a battery it paused itself. Balancing has its own Off / Dry-run / Auto setting and starts in Dry-run. It only matters while the batteries are running the house.
+
+## Manual buttons and settings
+
+The "Force charge ON/OFF" buttons send the command once; in Auto the plan stays in control and sets it back to what it wants at the next poll (within a minute). They are for testing, not an override.
+Settings are saved to `config.json`. The EV2-A prices in `planner.py` are the 2026-03-01 tariff; update them when PG&E changes rates.
+
+## Data
+
+`DATA_DIR` (default `./data`, `/data` in Docker) holds:
+- `homepower.db` (SQLite):
+  - `readings`: one row per minute with battery %, solar W, load W, grid W, forecast sunlight, and whether grid charging is on
+  - `events`: the activity log
+  - `readings` also stores each DPU's solar watts and battery % (`solar1_w`, `solar2_w`, `soc1`, `soc2`). The two arrays face different ways, so each DPU's solar is learned **per hour of day**. Once both DPUs have 20+ sunny minutes in an hour (over 14 days), that hour's profile replaces the combined estimate in the 3 PM forecast, and balancing uses DPU 1's own expected solar.
+  - `weather_hourly`: Open-Meteo per hour (total/direct/diffuse sunlight, cloud %, temperature). Past hours are refreshed with Open-Meteo's after-the-fact estimate, and the learning matches readings to these.
+  - `daily_savings`: one row per day: what the house would have cost all from the grid (`cost_without`), what the grid actually cost (`grid_cost`), `saved` = the difference plus the battery's change over the day at the off-peak price (so a grid charge or stored solar isn't counted as a loss before it's used; the credits cancel across days), home kWh, and solar kWh per DPU. Both costs use the PG&E price at each minute, so solar, the battery and its charging losses all show up in the difference. Today is recalculated every minute from `readings`; past days are stored once. `GET /api/savings` returns the history; `GET /api/day?date=YYYY-MM-DD` returns one day's hourly kWh, energy flow (grid by PG&E period with cost, solar, battery, home, losses) and savings.
+- `config.json`: dashboard settings and automation state.
+
+The solar learning reads the last 14 days of `readings`. Growth is about 0.5M rows (~30 MB) a year.
+
+
+## Running more than one copy (control lease)
+
+Only the copy holding the **control lease** sends automatic charge commands. Every other copy runs on standby: it shows everything and logs what it would do.
+
+- **Latest start wins:** a copy claims control when it starts, or when you click **Take control** on its dashboard.
+- **Renewal and failover:** the holder renews every minute. If it goes quiet for 5 minutes (laptop asleep), a standby copy takes over.
+- **Handover:** a copy that takes over adopts the panel's current force-charge state, so it can turn off a charge another copy started.
+- **The referee:** one copy (the VPS) stores the lease. Other copies must point at it:
+
+| Where | Variable | Value |
+|---|---|---|
+| VPS (Coolify) | `INSTANCE_NAME` | `vps` |
+| Laptop `.env` | `INSTANCE_NAME` | `laptop` |
+| Laptop `.env` | `LEADER_URL` | `https://<your VPS domain>` |
+| Laptop `.env` | `LEADER_PASSWORD` | the VPS `DASHBOARD_PASSWORD` (`LEADER_USER` defaults to `admin`) |
+
+A copy that can't reach the referee stays on standby: it never acts on a lease it can't confirm.
+
+**Caution:** a copy *without* `LEADER_URL` acts as its own referee. Two copies without it will **both** take control. Only the VPS should leave `LEADER_URL` unset.
+
+**Backups:** use Coolify's volume backup, or run `sqlite3 /data/homepower.db ".backup /data/backup.db"` inside the container.
