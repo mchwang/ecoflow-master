@@ -69,7 +69,7 @@ docker run -d --name home-power -p 8787:8787 -v home-power-data:/data \
 ```
 
 - **Password:** `DASHBOARD_PASSWORD` is required in Docker. Sign in as `admin`, or set `DASHBOARD_USER`.
-- **HTTPS:** if the server is reachable from the internet, put it behind HTTPS (a reverse proxy, Coolify, Caddy, etc.).
+- **HTTPS:** if the server is reachable from the internet, put it behind HTTPS (a reverse proxy, Coolify, Caddy, etc.). Behind a proxy, always set `DASHBOARD_PASSWORD`: without one, the app refuses every request that comes through the proxy.
 - **One copy:** run only one copy, so two controllers never fight over the panel.
 - **Health check:** `/healthz`.
 

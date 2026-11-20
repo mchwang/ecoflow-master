@@ -240,7 +240,10 @@ def find_panel():
 
 
 def save_cfg():
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+    # Write a copy, then swap it in: a kill mid-write (redeploy) or two threads saving can't leave a broken file.
+    tmp = CONFIG_FILE.with_name(f"{CONFIG_FILE.name}.{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps(cfg, indent=2))
+    os.replace(tmp, CONFIG_FILE)
 
 
 def log(msg):
@@ -787,16 +790,23 @@ def slow_fail():
         time.sleep(1)
 
 
-def authorized(header, cookie=""):
+def matches(user, pw):
+    """compare_digest on bytes: on str it raises TypeError for non-ASCII (a password with "ä" could never sign in)."""
+    return hmac.compare_digest(user.encode(), USER.encode()) & hmac.compare_digest(pw.encode(), PASSWORD.encode())
+
+
+def authorized(header, cookie="", proxied=False):
     if not PASSWORD:
-        return True  # only allowed when bound to localhost (checked at startup)
+        # Only allowed on localhost (checked at startup). A reverse proxy on the same machine also arrives from
+        # 127.0.0.1, but adds X-Forwarded-For: that's the internet, so refuse it.
+        return not proxied
     if valid_session(cookie):
         return True
     try:
         user, _, pw = base64.b64decode(header.removeprefix("Basic ")).decode().partition(":")
     except Exception:
         return False
-    if hmac.compare_digest(user, USER) & hmac.compare_digest(pw, PASSWORD):
+    if matches(user, pw):
         return True
     if header.startswith("Basic "):  # a wrong guess (no header at all is just a first visit)
         slow_fail()
@@ -804,8 +814,12 @@ def authorized(header, cookie=""):
 
 
 class Handler(BaseHTTPRequestHandler):
+    def _signed_in(self):
+        h = self.headers
+        return authorized(h.get("Authorization", ""), h.get("Cookie", ""), proxied="X-Forwarded-For" in h)
+
     def _auth(self):
-        if authorized(self.headers.get("Authorization", ""), self.headers.get("Cookie", "")):
+        if self._signed_in():
             return True
         self.send_response(401)
         self.send_header("WWW-Authenticate", 'Basic realm="Home Power", charset="UTF-8"')
@@ -829,7 +843,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/healthz":  # unauthenticated, for Coolify's health check
             return self._json({"ok": True})
-        if self.path == "/" and not authorized(self.headers.get("Authorization", ""), self.headers.get("Cookie", "")):
+        if self.path == "/" and not self._signed_in():
             return self._login_page()  # a sign-in page (sets a cookie) instead of the browser's basic-auth popup
         if not self._auth():
             return
@@ -863,7 +877,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/login":
             form = urllib.parse.parse_qs(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode())
             user, pw = form.get("user", [""])[0], form.get("password", [""])[0]
-            if not (hmac.compare_digest(user, USER) & hmac.compare_digest(pw, PASSWORD)):
+            if not PASSWORD or not matches(user, pw):  # no password set: nothing to sign in to (proxied requests stay out)
                 slow_fail()
                 return self._login_page("Wrong username or password", 401)
             secure = "; Secure" if self.headers.get("X-Forwarded-Proto") == "https" else ""  # HTTPS via Coolify's proxy
