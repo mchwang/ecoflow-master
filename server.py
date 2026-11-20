@@ -1,4 +1,4 @@
-"""EcoFlow Smart Home Panel 2 dashboard + PG&E EV2-A grid-charge automation.
+"""EcoFlow Smart Home Panel 2 dashboard + time-of-use grid-charge automation (rate plan: planner.load_plan).
 
 Run:  python3 server.py   then open http://127.0.0.1:8787
 Without ECOFLOW_ACCESS_KEY in .env it runs in demo mode with demo_quota.json.
@@ -21,14 +21,13 @@ from datetime import datetime, timedelta
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 from db import DB
 from ecoflow_api import SSL_CTX, EcoFlow
-from planner import OFFPEAK, afternoon_sun, evening_target, balance, hold_battery, daily_solar_kwh, day_report, deadline_of, decide, hourly_kwh, room_target, simulate, target_soc, hm12, fit_array_kw, fit_hourly_kw, solar_wh, solar_wh_hourly, tou_period
+import planner
+from planner import afternoon_sun, charge_window, evening_target, balance, hold_battery, daily_solar_kwh, day_report, deadline_of, decide, hourly_kwh, room_target, simulate, target_soc, hm12, fit_array_kw, fit_hourly_kw, solar_wh, solar_wh_hourly, tou_period
 
 HERE = Path(__file__).parent
-TZ = ZoneInfo("America/Los_Angeles")
 HISTORY_DAYS = 14
 MIN_SAMPLES = 60  # ~1 hour of daylight polls before trusting the learned array size
 POLL_S = 60
@@ -42,6 +41,12 @@ for line in (HERE / ".env").read_text().splitlines() if (HERE / ".env").exists()
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", HERE / "data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+# Rate plan: RATE_PLAN (after .env, so it can be set there) or the one saved from Settings; else rates/pge-ev2a.json.
+# Settings saves edits back to this same file, so there is one source either way.
+PLAN_FILE = Path(os.environ.get("RATE_PLAN") or DATA_DIR / "rate_plan.json")
+if os.environ.get("RATE_PLAN") or PLAN_FILE.exists():
+    planner.use_plan(PLAN_FILE)
+TZ = planner.PLAN["tz"]  # the plan's hours are local time where the meter is
 CONFIG_FILE = DATA_DIR / "config.json"
 db = DB(DATA_DIR / "homepower.db")
 HOST = os.environ.get("HOST", "127.0.0.1")
@@ -256,6 +261,21 @@ def save_cfg():
     os.replace(tmp, CONFIG_FILE)
 
 
+def plan_source():
+    """The current rate plan as written in its file (without the fields load_plan derives)."""
+    return {k: v for k, v in planner.PLAN.items() if k not in ("tz", "by_hour", "window")}
+
+
+def save_plan(plan):
+    """Write a checked plan (load_plan's result) to PLAN_FILE and switch to it, time zone included."""
+    global TZ
+    tmp = PLAN_FILE.with_name(f"{PLAN_FILE.name}.{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps({k: v for k, v in plan.items() if k not in ("tz", "by_hour", "window")}, indent=2))
+    os.replace(tmp, PLAN_FILE)
+    planner.PLAN, TZ = plan, plan["tz"]
+    weather["key"] = None  # forecast hours are fetched in the plan's time zone
+
+
 def log(msg):
     now = datetime.now(TZ)
     db.add_event(now.timestamp(), msg)
@@ -314,7 +334,7 @@ def summarize(d):
 
 
 def effective(s):
-    c = {**cfg, **OFFPEAK}
+    c = {**cfg, **charge_window(), "plan": planner.PLAN["name"]}
     c["capacity_wh"] = c["capacity_wh"] or s["fullCapWh"] or DPU_WH * max(1, len(s["batteries"]))
     c["charge_w"] = c["charge_w"] or s["chargeWattPower"] or 3000
     c["max_soc"] = s["maxChargeSoc"] or 100  # panel stops charging at its max level (target_soc caps to it)
@@ -578,7 +598,7 @@ def get_weather():
         return None
     if weather["key"] != key or time.time() - weather["at"] > 1800:
         url = "https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode({
-            "latitude": cfg["lat"], "longitude": cfg["lon"], "timezone": "America/Los_Angeles",
+            "latitude": cfg["lat"], "longitude": cfg["lon"], "timezone": TZ.key,
             "past_days": 1, "forecast_days": 2,  # past hours come back as Open-Meteo's after-the-fact estimate
             "hourly": "shortwave_radiation,direct_radiation,diffuse_radiation,cloud_cover,temperature_2m,wind_gusts_10m",
             "wind_speed_unit": "mph",
@@ -652,9 +672,11 @@ def tick(now=None):
         model = (hourly, profile, fallback_kw, loads, load_now, c["capacity_wh"], floor, c["max_soc"])
         if loads:  # without a learned load the fixed target stays (one live reading is too noisy for the evening)
             want = c["min_soc"]
-            c["min_soc"], need = evening_target(want, deadline, *model)
+            until = datetime.combine(deadline.date(), datetime.strptime(c["offpeak_start"], "%H:%M").time(), TZ)  # next cheap window
+            until += timedelta(days=1) if until <= deadline else timedelta()
+            c["min_soc"], need = evening_target(want, deadline, *model, until=until)
             if c["min_soc"] < want:
-                c["target_why"] += f"; lowered to the evening's need ({need:.0f}% to midnight)"
+                c["target_why"] += f"; lowered to the evening's need ({need:.0f}% until {'midnight' if until.hour == until.minute == 0 else hm12(until)})"
         want = c["min_soc"]
         c["min_soc"], room = room_target(want, deadline, *model)
         if room and c["min_soc"] < want:
@@ -663,7 +685,7 @@ def tick(now=None):
         held_sim = simulate(now, deadline, s["soc"], hourly, profile, fallback_kw, {}, 0, c["capacity_wh"], floor, c["max_soc"])
         hold, hold_why = hold_battery(period, bool(s["gridOnline"]), held_sim["wasted_wh"] / 1000, cfg["reserve_held"] is not None)
         held_now = hold and cfg["hold_mode"] == "auto"  # only plan on a hold we actually send
-        sim = held_sim if held_now else simulate(now, deadline, s["soc"], *model)  # held: house on grid until 3 PM
+        sim = held_sim if held_now else simulate(now, deadline, s["soc"], *model)  # held: house on grid until the deadline
         c["load_hours"] = len(loads)
         d = decide(now, s["soc"], c, pv_wh, cfg["charging_by_us"], projected=round(sim["soc"], 1))
         if s["gridOnline"] == 0:  # outage: the panel runs the house from the battery; there's nothing to charge from
@@ -882,7 +904,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({**day_data(day, now, cap), "today": now.date().isoformat(),
                         "first": first and datetime.fromtimestamp(first, TZ).date().isoformat()})
         elif self.path == "/api/state":
-            self._json({**state, "config": cfg, "demo": DEMO})
+            self._json({**state, "config": cfg, "rate_plan": plan_source(), "demo": DEMO})
         else:
             self._json({"error": "not found"}, 404)
 
@@ -911,9 +933,16 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
             if self.path == "/api/config":
                 with lock:
-                    new = dict(cfg)  # check the whole change before applying any of it
+                    new, plan = dict(cfg), None  # check the whole change before applying any of it
                     for k, v in body.items():
-                        if k in ("mode", "bal_mode", "hold_mode") and v in ("off", "dry-run", "auto"):
+                        if k == "rate_plan":
+                            try:
+                                text = json.loads(v)
+                            except (TypeError, ValueError) as e:
+                                raise ValueError(f"rate plan is not valid JSON: {e}")
+                            if text != plan_source():
+                                plan = planner.load_plan(text)  # raises ValueError naming the problem
+                        elif k in ("mode", "bal_mode", "hold_mode") and v in ("off", "dry-run", "auto"):
                             new[k] = v
                         elif k in NUMERIC:
                             v = float(v)
@@ -927,9 +956,13 @@ class Handler(BaseHTTPRequestHandler):
                     if new["bal_release_soc"] >= new["bal_full_soc"]:
                         raise ValueError("DPU 2 resume level must be below its pause level")
                     to_auto = new["mode"] == "auto" and cfg["mode"] != "auto"
+                    if plan:
+                        save_plan(plan)
+                        log(f"Rate plan changed to {plan['name']}: cheap window "
+                            f"{hm12(plan['window']['offpeak_start'])}-{hm12(plan['window']['offpeak_end'])}")
                     cfg.update(new)
                     save_cfg()
-                    log(f"Settings changed: {body}")
+                    log(f"Settings changed: { {k: v for k, v in body.items() if k != 'rate_plan'} }")
                     if to_auto and state["status"]:  # switching to Auto takes control (latest wins)
                         update_control(state["status"], force=True)
             elif self.path == "/api/lease":  # other copies ask this referee for control

@@ -32,6 +32,9 @@ class Base(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp())
         server.DEMO, server.api, server.LEADER_URL, server.INSTANCE = True, None, "", "me"
         server.CONFIG_FILE, server.db, server.demo = tmp / "config.json", DB(tmp / "t.db"), None
+        server.PLAN_FILE = tmp / "rate_plan.json"              # never write a plan into the real data dir
+        self.addCleanup(setattr, server, "TZ", server.TZ)
+        self.addCleanup(setattr, server.planner, "PLAN", server.planner.PLAN)
         self.addCleanup(server.db.conn.close)
         server.cfg.clear()
         server.cfg.update(server.DEFAULTS, mode="auto", hold_mode="auto", margin_min=900)  # big margin: charge window open all morning
@@ -60,6 +63,35 @@ class Profiles(unittest.TestCase):
         self.assertEqual(server.combined_profile({2: {}}, {}, p2), p2)                # one DPU in slot 2
         self.assertEqual(server.combined_profile({1: {}, 2: {}, 3: {}}, p1, p2), {})  # DPU 3 not recorded: combined fit
         self.assertEqual(server.combined_profile({}, p1, p2), {})
+
+
+class CustomRatePlan(Base):
+    PLAN = {"name": "Test evening peak", "timezone": "America/Los_Angeles", "summer_months": [],
+            "hours": {"on-peak": [[16, 21]]}, "prices": {"winter": {"off-peak": 0.10, "on-peak": 0.40}}}
+
+    def setUp(self):
+        super().setUp()
+        old = server.planner.PLAN
+        self.addCleanup(setattr, server.planner, "PLAN", old)
+        path = Path(tempfile.mkdtemp()) / "rates.json"
+        path.write_text(json.dumps(self.PLAN))
+        server.planner.use_plan(path)                          # what RATE_PLAN does at startup
+
+    def test_poll_follows_the_plan(self):
+        server.tick(at(22))                                    # 10 PM: cheap under this plan (EV2-A: part-peak)
+        d = server.state["decision"]
+        self.assertEqual(d["effective"]["plan"], "Test evening peak")
+        self.assertEqual((d["effective"]["offpeak_start"], d["effective"]["offpeak_end"]), ("21:00", "16:00"))
+        self.assertEqual((d["period"], d["price"]), ("off-peak", 0.10))
+        self.assertNotEqual(d["kind"], "outside")
+        server.tick(at(17))
+        self.assertEqual(server.state["decision"]["kind"], "outside")
+
+    def test_bad_plan_file_stops_with_the_reason(self):
+        path = Path(tempfile.mkdtemp()) / "rates.json"
+        path.write_text(json.dumps({**self.PLAN, "timezone": "Pacific"}))
+        with self.assertRaisesRegex(ValueError, "timezone"):
+            server.planner.use_plan(path)
 
 
 class Commands(Base):
@@ -475,7 +507,7 @@ class Commands(Base):
         self.assertEqual(self.sent(), [False])
 
     def test_off_peak_window_matches_the_tariff(self):
-        end = server.datetime.combine(at(0).date(), server.datetime.strptime(server.OFFPEAK["offpeak_end"], "%H:%M").time(), server.TZ)
+        end = server.datetime.combine(at(0).date(), server.datetime.strptime(server.charge_window()["offpeak_end"], "%H:%M").time(), server.TZ)
         self.assertEqual(server.tou_period(end - server.timedelta(minutes=1))[0], "off-peak")
         self.assertNotEqual(server.tou_period(end)[0], "off-peak")
 
@@ -567,6 +599,35 @@ class Http(HttpServer):
         code, r = self.post("/api/config", {"min_soc": 70, "bal_full_soc": 50})  # resume 75 >= pause 50
         self.assertEqual(code, 400)
         self.assertEqual((server.cfg["min_soc"], server.cfg["bal_full_soc"]), (60, 90))
+
+    def test_rate_plan_is_checked_before_anything_is_saved(self):
+        code, r = self.get("/api/state")
+        plan = r["rate_plan"]
+        self.assertEqual(plan["name"], "PG&E EV2-A")
+        self.assertNotIn("by_hour", plan)                                          # only what the file holds
+        overlap = {**plan, "hours": {"peak": [[16, 21]], "part-peak": [[15, 17]]}}
+        for bad, words in ((json.dumps(overlap), "hour 16 is in both"), ("{oops", "not valid JSON")):
+            code, r = self.post("/api/config", {"min_soc": 70, "rate_plan": bad})
+            self.assertEqual(code, 400); self.assertIn(words, r["error"])
+        self.assertEqual(server.cfg["min_soc"], 60)                                # nothing applied
+        self.assertFalse(server.PLAN_FILE.exists())
+        self.assertEqual(server.planner.PLAN["name"], "PG&E EV2-A")
+
+    def test_valid_rate_plan_is_saved_and_used_at_once(self):
+        plan = {"name": "Evening peak", "timezone": "America/New_York", "summer_months": [],
+                "hours": {"on-peak": [[16, 21]]}, "prices": {"winter": {"off-peak": 0.1, "on-peak": 0.4}}}
+        code, r = self.post("/api/config", {"min_soc": 65, "rate_plan": json.dumps(plan)})
+        self.assertEqual((code, r), (200, {"ok": True}))
+        self.assertEqual(json.loads(server.PLAN_FILE.read_text()), plan)          # survives a restart
+        self.assertEqual(server.charge_window(), {"offpeak_start": "21:00", "offpeak_end": "16:00"})
+        self.assertEqual(server.TZ.key, "America/New_York")
+        self.assertEqual(self.get("/api/state")[1]["rate_plan"], plan)
+        self.assertTrue(any("Rate plan changed to Evening peak: cheap window 9 PM-4 PM" in l for l in server.state["log"]))
+
+    def test_unchanged_rate_plan_writes_no_file(self):                             # every Save sends the box
+        plan = self.get("/api/state")[1]["rate_plan"]
+        self.assertEqual(self.post("/api/config", {"min_soc": 65, "rate_plan": json.dumps(plan)})[0], 200)
+        self.assertFalse(server.PLAN_FILE.exists())                                # default file stays in charge
 
     def test_save_succeeds_even_if_panel_read_fails(self):
         with mock.patch.object(server, "fetch", side_effect=RuntimeError("EcoFlow down")):

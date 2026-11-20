@@ -2,8 +2,9 @@ import unittest
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import planner
 from ecoflow_api import sign
-from planner import afternoon_sun, evening_target, balance, hold_battery, daily_solar_kwh, day_report, decide, fit_hourly_kw, hourly_kwh, room_target, simulate, solar_wh_hourly, target_soc, fit_array_kw, hm12, solar_wh, tou_period
+from planner import afternoon_sun, charge_window, deadline_of, load_plan, evening_target, balance, hold_battery, daily_solar_kwh, day_report, decide, fit_hourly_kw, hourly_kwh, room_target, simulate, solar_wh_hourly, target_soc, fit_array_kw, hm12, solar_wh, tou_period
 
 TZ = ZoneInfo("America/Los_Angeles")
 CFG = {"capacity_wh": 30720, "charge_w": 4000, "min_soc": 60, "max_soc": 95,
@@ -314,6 +315,68 @@ class Planner(unittest.TestCase):
         self.assertEqual(tou_period(at(15))[0], "part-peak")
         self.assertEqual(tou_period(at(23))[0], "part-peak")
         self.assertEqual(tou_period(at(2))[0], "off-peak")
+
+
+# Overnight plan: one expensive block 4-9 PM, so the cheap window runs 9 PM-4 PM across midnight.
+EVENING = {"name": "Test evening peak", "timezone": "America/New_York", "summer_months": [],
+           "hours": {"on-peak": [[16, 21]]}, "prices": {"winter": {"off-peak": 0.10, "on-peak": 0.40}}}
+
+
+class RatePlan(unittest.TestCase):
+    def use(self, plan):
+        old = planner.PLAN
+        planner.PLAN = load_plan(plan)
+        self.addCleanup(setattr, planner, "PLAN", old)
+
+    def test_default_file_is_ev2a(self):
+        self.assertEqual(planner.PLAN["name"], "PG&E EV2-A")
+        self.assertEqual(charge_window(), {"offpeak_start": "00:00", "offpeak_end": "15:00"})
+        self.assertEqual(planner.PLAN["tz"].key, "America/Los_Angeles")
+
+    def test_cheap_window_crosses_midnight(self):
+        self.use(EVENING)
+        w = charge_window()
+        self.assertEqual(w, {"offpeak_start": "21:00", "offpeak_end": "16:00"})
+        self.assertEqual(tou_period(at(17)), ("on-peak", "winter", 0.40))
+        self.assertEqual(tou_period(at(23))[0], "off-peak")
+        cfg = {**CFG, **w}
+        self.assertEqual(deadline_of(at(22), cfg), at(16) + timedelta(days=1))   # evening: tomorrow's 4 PM
+        self.assertEqual(deadline_of(at(9), cfg), at(16))                        # morning: today's
+        self.assertNotEqual(decide(at(22), 30, cfg, 0)["kind"], "outside")       # 10 PM is cheap: may charge
+        self.assertNotEqual(decide(at(3), 30, cfg, 0)["kind"], "outside")
+        self.assertEqual(decide(at(18), 30, cfg, 0)["kind"], "outside")          # 6 PM is on-peak: never
+
+    def test_longest_off_peak_run_is_the_window(self):
+        two = {**EVENING, "hours": {"peak": [[7, 9], [17, 20]]}, "prices": {"winter": {"off-peak": 0.1, "peak": 0.3}}}
+        self.use(two)
+        self.assertEqual(charge_window(), {"offpeak_start": "20:00", "offpeak_end": "07:00"})  # 11 h beats 9-17 (8 h)
+
+    def test_day_report_uses_the_plans_periods(self):
+        self.use(EVENING)
+        r = day_report([(at(17), 50, 1000, 1000, 0), (at(18), 50, 1000, 1000, 0)], 10000, max_gap_s=3600)
+        self.assertEqual(list(r["grid_kwh"]), ["off-peak", "on-peak"])               # cheapest first
+        self.assertAlmostEqual(r["grid_kwh"]["on-peak"], 1.0); self.assertAlmostEqual(r["grid_cost"], 0.40)
+
+    def test_bad_plans_say_what_is_wrong(self):
+        cases = {
+            "timezone": {**EVENING, "timezone": "Pacific"},
+            "both on-peak and peak": {**EVENING, "hours": {"on-peak": [[16, 21]], "peak": [[20, 22]]}},
+            "[16, 25]": {**EVENING, "hours": {"on-peak": [[16, 25]]}},
+            "winter on-peak": {**EVENING, "prices": {"winter": {"off-peak": 0.1}}},
+            "summer": {**EVENING, "summer_months": [7]},                              # summer used but not priced
+            "flat rate": {**EVENING, "hours": {}},
+            "only the expensive": {**EVENING, "hours": {"off-peak": [[0, 5]], "on-peak": [[16, 21]]}},
+        }
+        for words, plan in cases.items():
+            with self.subTest(words), self.assertRaises(ValueError) as e:
+                load_plan(plan)
+            self.assertIn(words, str(e.exception))
+
+    def test_evening_need_counts_until_the_next_cheap_window(self):
+        dark = [(at(h), 0) for h in range(24)]
+        # 500 W from 4 PM to 9 PM = 2.5 kWh +10% = 27.5% of 10 kWh; to midnight would be 44%
+        t, need = evening_target(95, at(16), dark, {}, 0, {}, 500, 10000, 10, 95, until=at(21))
+        self.assertAlmostEqual(need, 27.5)
 
 
 class Signing(unittest.TestCase):

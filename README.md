@@ -26,9 +26,9 @@ EcoFlow's built-in modes work for a simple setup. They fall short when:
 
 ## Before you start
 
-- **Hardware:** a Smart Home Panel 2 with one or two DELTA Pro Ultra stacks. Other EcoFlow panels use different commands and won't work without changes.
+- **Hardware:** a Smart Home Panel 2 with one to three DELTA Pro Ultra stacks; capacity and charge power are read from the panel. Balancing between stacks needs DPUs in slots 1 and 2. Other EcoFlow panels use different commands and won't work without changes.
 - **An EcoFlow developer account** for an access key and secret key. Apply at [developer.ecoflow.com](https://developer.ecoflow.com); approval can take a few days.
-- **Your rate plan:** the prices and hours are **PG&E EV2-A**, in California time. For another plan, edit the rates in `planner.py` and the time zone in `server.py`.
+- **Your rate plan:** **PG&E EV2-A** in California time out of the box. Any other time-of-use plan is one JSON file; see [Your rate plan](#your-rate-plan).
 - **Python 3.11+** or **Docker**. Nothing else to install.
 
 ## Try it with demo data
@@ -55,6 +55,31 @@ Open http://127.0.0.1:8787.
 4. Switch to **Auto** when you're happy with it.
 
 Every automation starts in Dry-run. Balancing and battery hold each have their own Off / Dry-run / Auto switch.
+
+## Your rate plan
+
+The prices, hours and time zone come from a JSON plan. The easiest way to change it is **Settings → Rate plan**: edit the JSON and click **Save settings**. The plan is checked first; if anything is wrong, nothing is saved and the message says what to fix. A valid plan takes effect at once and is kept in `rate_plan.json` in the data folder.
+
+The default is [`rates/pge-ev2a.json`](rates/pge-ev2a.json). You can also point `RATE_PLAN` at a file of your own (in `.env`, or `-e RATE_PLAN=/data/rates.json` in Docker with the file in the data volume); edits from Settings are then saved to that file. The format:
+
+```json
+{
+  "name": "My utility TOU-D",
+  "timezone": "America/New_York",
+  "summer_months": [6, 7, 8, 9],
+  "hours": { "peak": [[16, 21]], "mid-peak": [[14, 16]] },
+  "prices": {
+    "summer": { "off-peak": 0.12, "mid-peak": 0.25, "peak": 0.45 },
+    "winter": { "off-peak": 0.11, "mid-peak": 0.20, "peak": 0.32 }
+  }
+}
+```
+
+- **`hours`:** the expensive periods as `[start, end)` whole hours, 0-24, local time. Every hour you don't list is off-peak. Name the periods whatever your bill calls them.
+- **`prices`:** $/kWh for each period plus `"off-peak"`, for `winter` and, if `summer_months` isn't empty, `summer`.
+- **The cheap window** is your longest run of off-peak hours, and it may cross midnight (with the plan above: 9 PM to 2 PM). The app grid-charges only inside it, aiming for the minimum level by the time it ends.
+- A mistake in the file stops the app at startup with a message naming the problem.
+- **Not supported yet:** different hours on weekends or holidays, or hours that change by season.
 
 ## Run it all the time (Docker)
 

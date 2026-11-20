@@ -31,7 +31,7 @@ The app keeps the two DPUs within 10% of each other (setting: Max difference bet
 ## Manual buttons and settings
 
 The "Force charge ON/OFF" buttons send the command once; in Auto the plan stays in control and sets it back to what it wants at the next poll (within a minute). They are for testing, not an override.
-Settings are saved to `config.json`. The EV2-A prices in `planner.py` are the 2026-03-01 tariff; update them when PG&E changes rates.
+Settings are saved to `config.json`. Prices and hours come from the rate plan file (`rates/pge-ev2a.json`, the 2026-03-01 PG&E EV2-A tariff, unless `RATE_PLAN` names another); update it when your utility changes rates.
 
 ## Data
 

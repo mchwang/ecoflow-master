@@ -199,7 +199,10 @@
   #cfg-dlg h2 { display:flex; align-items:center; gap:8px; margin:0; font-size:18px; }
   #cfg-dlg .form-foot { position:sticky; bottom:0; padding-block:12px 16px; background:var(--bg); }  /* Save stays reachable on a phone */
   label.field { display:flex; flex-direction:column; gap:4px; font-size:14px; font-weight:500; }
-  label.field > :is(input, select) { margin-top:auto; }  /* help text varies 0-3 lines: keep every input in a row level */
+  label.field > :is(input, select, textarea) { margin-top:auto; }
+  label.field.wide { grid-column:1 / -1; }
+  textarea { font:13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; padding:8px 10px; border:1px solid var(--input); border-radius:10px; background:var(--bg); color:var(--fg); width:100%; resize:vertical; }
+  textarea[aria-invalid="true"] { border-color:var(--bad); }  /* help text varies 0-3 lines: keep every input in a row level */
   label.field small { color:var(--mute); font-weight:400; font-size:13px; }
   input:not([type=radio]), select { font:inherit; min-height:44px; padding:8px 10px; border:1px solid var(--input); border-radius:10px; background:var(--bg); color:var(--fg); width:100%; }
   .form-foot { grid-column:1 / -1; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
@@ -330,7 +333,7 @@
       <b class="value num" id="gridw">–</b></div>
     <div class="card kpi"><div class="top"><span class="label">Backup time</span><span class="badge"><svg class="ic"><use href="#i-clock"/></svg></span></div>
       <b class="value num" id="left">–</b><span class="sub">at current load</span></div>
-    <div class="card kpi" style="--c:var(--ok)" title="What the house would have cost all from the grid, minus what the grid actually cost (PG&amp;E price each minute). Solar, the battery and its charging losses are all included.">
+    <div class="card kpi" style="--c:var(--ok)" title="What the house would have cost all from the grid, minus what the grid actually cost (your rate plan's price each minute). Solar, the battery and its charging losses are all included.">
       <div class="top"><span class="label">Saved today</span><span class="badge" style="--c:var(--ok)"><svg class="ic"><use href="#i-dollar"/></svg></span></div>
       <b class="value num" id="saved">–</b><span class="sub num" id="saved-sub"></span></div>
   </section>
@@ -374,7 +377,7 @@
   </section>
 
   <section class="card" aria-labelledby="sc-h">
-    <h2 id="sc-h"><svg class="ic sm"><use href="#i-zap"/></svg>Smart charge · PG&amp;E EV2-A</h2>
+    <h2 id="sc-h"><svg class="ic sm"><use href="#i-zap"/></svg>Smart charge · <span id="plan-name"></span></h2>
     <div class="status" aria-live="polite"><span class="badge" id="sbadge"><svg class="ic"><use id="sicon" href="#i-bolt-batt"/></svg></span>
       <div><div class="row" style="gap:10px"><b id="stitle" class="headline">–</b><span class="chip" id="smode"></span></div><p id="sreason" class="why"></p><p id="sbatt" class="why mute"></p></div>
       <div class="goal" id="goal"><span class="label" id="proj-l">Expected by deadline (no grid)</span><b class="num" id="proj">–</b>
@@ -435,6 +438,7 @@
         <label class="field">Battery capacity Wh<small>0 = read from panel</small><input name="capacity_wh" type="number" min="0"></label>
         <label class="field">Charge power W<small>0 = panel's AC charge setting</small><input name="charge_w" type="number" min="0"></label>
         <label class="field">Safety margin, minutes<input name="margin_min" type="number" min="0"></label>
+        <label class="field wide">Rate plan<small>Your utility's prices and hours as JSON: expensive periods as [start, end) whole hours in local time, every other hour off-peak. Checked before anything is saved; see README "Your rate plan".</small><textarea name="rate_plan" id="rate-plan" rows="14" spellcheck="false" aria-describedby="cfg-msg"></textarea></label>
         <div class="form-foot"><button type="submit">Save settings</button><button class="ghost" type="button" onclick="toggleSettings(false)">Close</button><span id="cfg-msg" role="status"></span></div>
       </form>
       </dialog>
@@ -453,7 +457,7 @@
     <p class="caption">kWh per hour, from the readings taken every minute. Hover or tap a bar for that hour's details; each chart has its own scale.</p>
     <h3 class="subh">Energy flow</h3>
     <div class="fc-wrap"><svg id="sankey" class="sankey" role="img"></svg></div>
-    <p class="caption">Where the day's energy came from (left) and went (right). Grid power is split by PG&amp;E period with what it cost.</p>
+    <p class="caption">Where the day's energy came from (left) and went (right). Grid power is split by rate period with what it cost.</p>
     <h3 class="subh">Energy balance</h3>
     <div class="ebar" id="ebar" role="img"></div>
     <div class="facts" id="ebal"></div>
@@ -584,7 +588,8 @@ async function refresh() {
 
   if (d) {
     const e = { ...d.effective, min_soc: Math.round(d.effective.min_soc) },  // the evening target is computed, so it has decimals
-          cls = { 'peak':'bad', 'part-peak':'warn', 'off-peak':'ok' }[d.period];
+          cls = { 'peak':'bad', 'off-peak':'ok' }[d.period] || 'warn';  // other names a rate plan uses: in between
+    $('plan-name').textContent = e.plan;
     $('tou').innerHTML = `<span class="dot ${cls}"></span>${icon('dollar')}${d.period} · $${d.price.toFixed(3)}/kWh · ${d.season}`;
     $('sbadge').style.setProperty('--c', d.kind === 'outage' ? 'var(--low)' : d.charge || d.startAt ? 'var(--warn)' : 'var(--ok)');
     $('sbadge').classList.toggle('glow', !!d.charge);
@@ -611,7 +616,7 @@ async function refresh() {
       : st.config.mode === 'dry-run' ? `<span class="dot warn"></span>Dry-run · logging only`
       : standby ? `<span class="dot warn"></span>Standby · another copy is in control`
       : `<span class="dot ok"></span>Auto`;
-    $('goal').hidden = (st.updated || '').slice(11, 16) >= e.offpeak_end;  // meaningless after the deadline; back at midnight
+    $('goal').hidden = d.kind === 'outside';  // meaningless outside the cheap window; back when it opens
     $('proj-l').textContent = `Expected by ${t12(e.offpeak_end)} (no grid)`;
     $('proj').innerHTML = `${d.projectedSoc}% <span class="mute" style="font-size:14px;font-weight:400">min ${e.min_soc}%</span>`;
     $('proj').className = 'num ' + (d.projectedSoc >= e.min_soc ? 'ok' : 'warn');
@@ -686,7 +691,7 @@ async function refresh() {
     $('ctl').title = c.error || `This copy: ${c.instance} · control referee: ${c.referee}`;
     $('take').hidden = c.leader || !auto;
   }
-  if (!cfgLoaded) { for (const el of $('cfg').elements) if (el.name) el.value = st.config[el.name]; cfgLoaded = true; }
+  if (!cfgLoaded) { for (const el of $('cfg').elements) if (el.name) el.value = el.name === 'rate_plan' ? planText(st.rate_plan) : st.config[el.name]; cfgLoaded = true; }
 }
 
 async function post(path, body) {
@@ -695,11 +700,17 @@ async function post(path, body) {
   return r;
 }
 
+// JSON with number lists on one line, like rates/pge-ev2a.json: "peak": [[16, 21]] instead of one number per line
+const planText = p => JSON.stringify(p, null, 2)
+  .replace(/\[\s*([-\d.,\s]+?)\s*\]/g, (_, a) => `[${a.split(/,\s*/).join(', ')}]`)
+  .replace(/\[\s*((?:\[[^\[\]]*\],?\s*)+)\]/g, (_, a) => `[${a.trim().split(/\],\s*/).join('], ')}]`);
 async function saveCfg(e) {
   e.preventDefault();
   const r = await post('/api/config', Object.fromEntries(new FormData(e.target)));
   $('cfg-msg').className = r.error ? 'bad' : 'ok';
   $('cfg-msg').textContent = r.error ? `Not saved: ${r.error}` : 'Saved';
+  $('rate-plan').setAttribute('aria-invalid', !!r.error && /rate plan/.test(r.error));
+  if (!r.error) refresh();  // a new plan changes the cheap window, prices and header now
 }
 
 for (const r of document.querySelectorAll('#mode input'))
@@ -759,7 +770,7 @@ function renderDay(r) {
   drawBalance(rep, r.readings);
   const sv = last?.savings, m = v => (v < 0 ? '−$' : '$') + Math.abs(v).toFixed(2);
   $('sv-day').innerHTML = [
-    [`Cost without the system`, m(rep.cost_without), 'house all from grid at PG&E prices'],
+    [`Cost without the system`, m(rep.cost_without), 'house all from grid at your plan’s prices'],
     ['Actual grid cost', m(rep.grid_cost), 'what the grid really billed'],
     ['Battery change', m(rep.battery_value ?? 0), `${kwh((rep.stored_kwh || 0) - (rep.drawn_kwh || 0))} at the off-peak price`],
     [isToday ? 'Saved today' : 'Saved that day', m(rep.saved),
@@ -788,7 +799,7 @@ function drawSankey(rep, n) {
   const svg = $('sankey'), W = Math.max(620, svg.clientWidth || 620), H = 280, gap = 10, LX = 170, RX = W - 170, MX = W / 2, BW = 12;
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   if (!n) { svg.innerHTML = `<text class="s" x="${W / 2}" y="${H / 2}" text-anchor="middle">No readings for this day</text>`; return; }
-  const P = [['off-peak', 'Grid · off-peak', 'var(--grid)'], ['part-peak', 'Grid · part-peak', 'var(--warn)'], ['peak', 'Grid · peak', 'var(--low)']];
+  const P = Object.keys(rep.grid_kwh).map(p => [p, `Grid · ${p}`, { 'off-peak': 'var(--grid)', peak: 'var(--low)' }[p] || 'var(--warn)']);  // the plan's periods, cheapest first
   const left = P.filter(([p]) => rep.grid_kwh[p] > 0.005).map(([p, label, c]) => ({ id: p, label, c, v: rep.grid_kwh[p], sub: `$${rep.grid_usd[p].toFixed(2)}` }))
     .concat([{ id: 'solar', label: 'Solar', c: 'var(--solar)', v: rep.solar_kwh, sub: 'free' }])
     .concat(rep.drawn_kwh > 0.005 ? [{ id: 'start', label: 'Battery (earlier)', c: 'var(--batt)', v: rep.drawn_kwh, sub: 'stored before' }] : []);

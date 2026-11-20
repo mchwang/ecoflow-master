@@ -1,15 +1,80 @@
 """Decide whether to force-charge from grid so the battery reaches a minimum level before the price goes up.
 
-Default plan: PG&E EV2-A. Off-peak 00:00-15:00; part-peak 15-16 and 21-24; peak 16-21 (every day).
-Solar expected before the deadline (from the weather forecast) counts toward the minimum.
+The utility rate plan (prices, hours, time zone) comes from a JSON file: rates/pge-ev2a.json by default, or the
+file named by RATE_PLAN (see load_plan). The cheap window is the plan's longest run of off-peak hours; its end is
+the deadline. Solar expected before the deadline (from the weather forecast) counts toward the minimum.
 """
+import json
 from datetime import datetime, time, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
-# $/kWh, PG&E EV2-A bundled, effective 2026-03-01. Update from pge.com/tariffs when rates change.
-EV2A = {
-    "summer": {"off-peak": 0.22558, "part-peak": 0.42760, "peak": 0.53809},
-    "winter": {"off-peak": 0.22558, "part-peak": 0.39428, "peak": 0.41099},
-}
+def load_plan(plan):
+    """Check a rate plan (dict from JSON) and add the derived fields; raises ValueError naming what's wrong.
+
+    {"name": str, "timezone": IANA name, "summer_months": [1-12...] (may be empty),
+     "hours": {period: [[start_hour, end_hour), ...]}  # whole hours 0-24; every hour not listed is "off-peak"
+     "prices": {"summer": {period: $/kWh}, "winter": {...}}}  # every period plus "off-peak"; summer only if used
+    shortcut: same hours every day and all year (no weekends/holidays, no seasonal hours); upgrade when a user needs it.
+    """
+    def bad(msg):
+        raise ValueError(f"rate plan {plan.get('name', '?') if isinstance(plan, dict) else '?'}: {msg}")
+    if not isinstance(plan, dict) or not isinstance(plan.get("name"), str):
+        bad('needs a "name"')
+    try:
+        tz = ZoneInfo(plan.get("timezone", ""))
+    except Exception:
+        bad(f'"timezone" {plan.get("timezone")!r} is not an IANA time zone like "America/New_York"')
+    months = plan.get("summer_months", [])
+    if not isinstance(months, list) or any(m not in range(1, 13) for m in months):
+        bad('"summer_months" must be a list of month numbers 1-12')
+    by_hour = ["off-peak"] * 24
+    for name, ranges in (plan.get("hours") or {}).items():
+        if name == "off-peak":
+            bad('"hours" lists only the expensive periods; every hour not listed is off-peak')
+        for r in ranges if isinstance(ranges, list) else [None]:
+            if not (isinstance(r, list) and len(r) == 2 and all(isinstance(x, int) for x in r) and 0 <= r[0] < r[1] <= 24):
+                bad(f'"hours" for {name}: {r!r} is not [start_hour, end_hour] with 0 <= start < end <= 24')
+            for h in range(*r):
+                if by_hour[h] != "off-peak":
+                    bad(f"hour {h} is in both {by_hour[h]} and {name}")
+                by_hour[h] = name
+    off = [by_hour[h] == "off-peak" for h in range(24)]
+    if all(off) or not any(off):
+        bad("needs some off-peak hours and some more expensive ones (a flat rate has nothing to time)")
+    for season in ("summer", "winter") if months else ("winter",):
+        for period in set(by_hour):
+            price = (plan.get("prices") or {}).get(season, {}).get(period)
+            if not isinstance(price, (int, float)) or price < 0:
+                bad(f'"prices" needs a $/kWh number for {season} {period}')
+    # cheap window = longest run of off-peak hours, wrapping past midnight (e.g. 21:00-16:00)
+    best = (0, 0)
+    for start in range(24):
+        if off[start] and not off[start - 1]:
+            n = next(k for k in range(1, 25) if not off[(start + k) % 24])
+            best = max(best, (n, -start))
+    n, start = best[0], -best[1]
+    return {**plan, "tz": tz, "by_hour": by_hour,
+            "window": {"offpeak_start": f"{start:02d}:00", "offpeak_end": f"{(start + n) % 24:02d}:00"}}
+
+
+PLAN = load_plan(json.loads((Path(__file__).parent / "rates" / "pge-ev2a.json").read_text()))
+
+
+def use_plan(path):
+    """Switch to the rate plan in a JSON file (RATE_PLAN); bad files stop the app with the reason."""
+    global PLAN
+    PLAN = load_plan(json.loads(Path(path).read_text()))
+
+
+def charge_window():
+    """{"offpeak_start", "offpeak_end"} "HH:MM" of the current plan's cheap window (end = the deadline)."""
+    return dict(PLAN["window"])
+
+
+def in_window(t, cfg):
+    start, end = time.fromisoformat(cfg["offpeak_start"]), time.fromisoformat(cfg["offpeak_end"])
+    return start <= t < end if start < end else t >= start or t < end  # second form: window crosses midnight
 
 
 def hm12(t):
@@ -18,18 +83,17 @@ def hm12(t):
     return f"{t.hour % 12 or 12}{f':{t.minute:02d}' if t.minute else ''} {'AM' if t.hour < 12 else 'PM'}"
 
 
-OFFPEAK = {"offpeak_start": "00:00", "offpeak_end": "15:00"}  # EV2-A cheap window; must match tou_period
-
-
 def tou_period(now):
-    h = now.hour
-    period = "peak" if 16 <= h < 21 else "part-peak" if h == 15 or h >= 21 else "off-peak"
-    season = "summer" if 6 <= now.month <= 9 else "winter"
-    return period, season, EV2A[season][period]
+    period = PLAN["by_hour"][now.hour]
+    season = "summer" if now.month in PLAN.get("summer_months", []) else "winter"
+    return period, season, PLAN["prices"][season][period]
 
 
 def deadline_of(now, cfg):
-    return datetime.combine(now.date(), time.fromisoformat(cfg["offpeak_end"]), now.tzinfo)
+    """End of the cheap window now is in: today's, or tomorrow's when the window crosses midnight and it's evening."""
+    end = datetime.combine(now.date(), time.fromisoformat(cfg["offpeak_end"]), now.tzinfo)
+    start = time.fromisoformat(cfg["offpeak_start"])
+    return end + timedelta(days=1) if start > end.time() and now.time() >= start else end
 
 
 def solar_wh(now, until, hourly, pv_kw, pr):
@@ -91,16 +155,16 @@ def room_target(target, deadline, hourly, kw_by_hour, fallback_kw, load_by_hour,
     return max(floor_soc, min(target, max_soc - room)), room
 
 
-def evening_target(target, deadline, hourly, kw_by_hour, fallback_kw, load_by_hour, load_now, cap, floor_soc, max_soc):
-    """Lower the deadline target to what the house needs from the deadline to midnight (load minus solar), so
-    no grid-charged energy is left at midnight to run the house off-peak, where its ~20% round-trip loss
-    costs more than grid power directly. Returns (target, need %).
+def evening_target(target, deadline, hourly, kw_by_hour, fallback_kw, load_by_hour, load_now, cap, floor_soc, max_soc, until=None):
+    """Lower the deadline target to what the house needs from the deadline until the next cheap window (`until`,
+    default midnight) as load minus solar, so no grid-charged energy is left to run the house off-peak, where its
+    ~20% round-trip loss costs more than grid power directly. Returns (target, need %).
     shortcut: solar surplus counts in full even past max_soc; room_target already caps the target for that."""
     run = need = 0.0
-    midnight = deadline.replace(hour=0, minute=0) + timedelta(days=1)
-    for s, l in _hours(deadline, midnight, hourly, kw_by_hour, fallback_kw, load_by_hour, load_now):
+    until = until or deadline.replace(hour=0, minute=0) + timedelta(days=1)
+    for s, l in _hours(deadline, until, hourly, kw_by_hour, fallback_kw, load_by_hour, load_now):
         run += l - s
-        need = max(need, run)  # deepest drain below the 3 PM level before midnight
+        need = max(need, run)  # deepest drain below the deadline level before the cheap window
     # 10% headroom: short at peak costs ~$0.13/kWh, a leftover kWh only ~$0.06, so err on the high side
     pct = need * 1.1 / cap * 100
     return max(floor_soc, min(target, floor_soc + pct)), pct
@@ -137,7 +201,7 @@ def decide(now, soc, cfg, pv_wh=0.0, charging_by_us=False, projected=None):
     cap, min_soc = cfg["capacity_wh"], cfg["min_soc"]
     projected = min(cfg["max_soc"], soc + pv_wh / cap * 100) if projected is None else projected
     out = {"charge": False, "start_at": None, "projected_soc": round(projected, 1)}
-    if not (time.fromisoformat(cfg["offpeak_start"]) <= now.time() < time.fromisoformat(cfg["offpeak_end"])):
+    if not in_window(now.time(), cfg):
         return {**out, "kind": "outside", "reason": f"Outside off-peak window ({hm12(cfg['offpeak_start'])}-{hm12(cfg['offpeak_end'])}); never grid-charge at high price"}
     solar = f"solar adds ~{pv_wh / 1000:.1f} kWh"
     # Keep charging 2% past the minimum once started, so a small forecast change doesn't flip it on and off.
@@ -223,7 +287,7 @@ def day_report(rows, cap_wh, max_gap_s=300):
 
     rows: [(datetime, soc %, load_w, grid_w, solar_w[, battery_wh])] in time order; each reading holds until the next,
     gaps over max_gap_s (app down) are skipped. Each minute the house takes solar first, then grid, then
-    battery; whatever solar and grid is left over goes into the battery. Grid kWh and $ are split by PG&E
+    battery; whatever solar and grid is left over goes into the battery. Grid kWh and $ are split by rate
     period. Saved = what the house would have cost all from the grid minus what the grid actually cost, plus the
     battery's change over the day at the off-peak price (what refilling it from the grid would cost). Without that,
     a grid charge counts as a cost the day it's bought and solar stored in the battery counts for nothing until it's
@@ -233,7 +297,7 @@ def day_report(rows, cap_wh, max_gap_s=300):
     energy in (grid + solar + drawn from earlier charge) =
     home + stored + losses; balance_kwh is the raw losses figure (negative = the meters disagree a little).
     """
-    periods = ("off-peak", "part-peak", "peak")
+    periods = sorted(set(PLAN["by_hour"]), key=lambda p: PLAN["prices"]["winter"][p])  # cheapest first, e.g. off-peak, part-peak, peak
     grid_home, grid_batt, grid_usd = (dict.fromkeys(periods, 0.0) for _ in range(3))
     solar_home = solar_batt = batt_home = home = without = delta = 0.0
     off_price = 0.0
@@ -249,7 +313,7 @@ def day_report(rows, cap_wh, max_gap_s=300):
         k = dt_s / 3.6e6                                   # W -> kWh over this reading
         load, imp, solar = max(0.0, load), max(0.0, grid), max(0.0, solar or 0)
         period, season, price = tou_period(t)
-        off_price = EV2A[season]["off-peak"]
+        off_price = PLAN["prices"][season]["off-peak"]
         sh = min(solar, load); gh = min(imp, load - sh)
         solar_home += sh * k; solar_batt += (solar - sh) * k
         grid_home[period] += gh * k; grid_batt[period] += (imp - gh) * k; grid_usd[period] += imp * k * price
@@ -286,7 +350,7 @@ def hold_battery(period, grid_online, waste_if_held_kwh, held):
     if waste_if_held_kwh > 0.2:
         return False, f"holding would waste ~{waste_if_held_kwh:.1f} kWh of solar, so the house uses the battery to make room"
     if held or waste_if_held_kwh < 0.05:
-        return True, "off-peak: house on cheap grid power, battery saved for 3 PM"
+        return True, "off-peak: house on cheap grid power, battery saved for the expensive hours"
     return False, "a little solar would overflow: the battery keeps running the house"
 
 

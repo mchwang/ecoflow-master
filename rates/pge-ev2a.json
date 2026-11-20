@@ -1,0 +1,14 @@
+{
+  "name": "PG&E EV2-A",
+  "timezone": "America/Los_Angeles",
+  "summer_months": [6, 7, 8, 9],
+  "hours": {
+    "peak": [[16, 21]],
+    "part-peak": [[15, 16], [21, 24]]
+  },
+  "prices": {
+    "summer": {"off-peak": 0.22558, "part-peak": 0.42760, "peak": 0.53809},
+    "winter": {"off-peak": 0.22558, "part-peak": 0.39428, "peak": 0.41099}
+  },
+  "source": "PG&E EV2-A bundled, $/kWh, effective 2026-03-01 (pge.com/tariffs)"
+}
