@@ -192,8 +192,14 @@
   .confirm { border:1px solid var(--warn); border-radius:10px; padding:10px 12px; animation:rise .25s both; }
 
   details > summary { cursor:pointer; min-height:44px; display:flex; align-items:center; gap:8px; font-weight:600; }
-  form { display:grid; gap:14px; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); align-items:start; margin-top:16px; animation:rise .3s both; }
-  label.field { display:grid; gap:4px; font-size:14px; font-weight:500; }
+  form { display:grid; gap:14px; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); align-items:stretch; margin-top:16px; animation:rise .3s both; }
+  #cfg-dlg { width:min(1000px, calc(100% - 32px)); max-height:calc(100dvh - 32px); padding:20px 20px 0; overflow:auto;
+    background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:16px; }
+  #cfg-dlg::backdrop { background:rgba(2,6,14,.6); backdrop-filter:blur(3px); }
+  #cfg-dlg h2 { display:flex; align-items:center; gap:8px; margin:0; font-size:18px; }
+  #cfg-dlg .form-foot { position:sticky; bottom:0; padding-block:12px 16px; background:var(--bg); }  /* Save stays reachable on a phone */
+  label.field { display:flex; flex-direction:column; gap:4px; font-size:14px; font-weight:500; }
+  label.field > :is(input, select) { margin-top:auto; }  /* help text varies 0-3 lines: keep every input in a row level */
   label.field small { color:var(--mute); font-weight:400; font-size:13px; }
   input:not([type=radio]), select { font:inherit; min-height:44px; padding:8px 10px; border:1px solid var(--input); border-radius:10px; background:var(--bg); color:var(--fg); width:100%; }
   .form-foot { grid-column:1 / -1; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
@@ -307,6 +313,7 @@
       <span id="grid" class="chip"></span>
       <span id="tou" class="chip"></span>
       <span id="upd" class="chip"></span>
+      <button class="ghost" type="button" id="cfg-btn" aria-expanded="false" aria-haspopup="dialog" aria-controls="cfg-dlg" onclick="toggleSettings()"><svg class="ic"><use href="#i-sliders"/></svg>Settings</button>
       <button class="ghost" type="button" id="theme" onclick="toggleTheme()"><svg class="ic"><use id="theme-ic" href="#i-sun"/></svg><span id="theme-t"></span></button>
     </div>
   </header>
@@ -403,11 +410,12 @@
           <button type="button" id="fc-yes">Yes</button>
           <button class="ghost" type="button" onclick="cancelForce()">Cancel</button>
         </div>
-        <button class="ghost" type="button" id="cfg-btn" aria-expanded="false" aria-controls="cfg" onclick="toggleSettings()"><svg class="ic"><use href="#i-sliders"/></svg><span id="cfg-t">Settings</span></button>
       </div>
     </div>
 
-      <form id="cfg" onsubmit="saveCfg(event)" novalidate hidden>
+      <dialog id="cfg-dlg" aria-labelledby="cfg-h">
+      <h2 id="cfg-h"><svg class="ic"><use href="#i-sliders"/></svg>Settings</h2>
+      <form id="cfg" onsubmit="saveCfg(event)" novalidate>
         <label class="field">Minimum % by deadline<small>When the afternoon is sunny</small><input name="min_soc" type="number" min="10" max="100"></label>
         <label class="field">Minimum % if no afternoon sun<small>Little or no sun after the deadline</small><input name="min_soc_cloudy" type="number" min="10" max="100"></label>
         <label class="field">Sunny if afternoon sunlight ≥<small>Wh/m² from the deadline to sunset (300 typical)</small><input name="sunny_after_wh" type="number" min="0" step="50"></label>
@@ -429,6 +437,7 @@
         <label class="field">Safety margin, minutes<input name="margin_min" type="number" min="0"></label>
         <div class="form-foot"><button type="submit">Save settings</button><button class="ghost" type="button" onclick="toggleSettings(false)">Close</button><span id="cfg-msg" role="status"></span></div>
       </form>
+      </dialog>
   </section>
 
   <section class="card" aria-labelledby="td-h">
@@ -704,11 +713,16 @@ function askForce(v) {
   $('fc-yes').onclick = async () => { cancelForce(); const r = await post('/api/force', { on: v }); if (r.error) showError(r.error); };
   $('force-btns').hidden = true; $('force-confirm').hidden = false; $('fc-yes').focus();
 }
-function toggleSettings(open = $('cfg').hidden) {
-  $('cfg').hidden = !open; $('cfg-btn').setAttribute('aria-expanded', open); $('cfg-t').textContent = open ? 'Hide settings' : 'Settings';
-  if (!open) $('cfg-btn').focus();  // back to where it opened, so the page doesn't jump
+function toggleSettings(open = !$('cfg-dlg').open) {
+  if (open) { $('cfg-msg').textContent = ''; $('cfg-dlg').showModal(); $('cfg-btn').setAttribute('aria-expanded', true); }
+  else $('cfg-dlg').close();
 }
-addEventListener('keydown', e => { if (e.key === 'Escape' && !$('cfg').hidden) toggleSettings(false); });
+// Escape, Close and a click outside all end in 'close'; the browser returns focus to the Settings button
+$('cfg-dlg').addEventListener('close', () => $('cfg-btn').setAttribute('aria-expanded', false));
+$('cfg-dlg').addEventListener('click', e => {
+  const r = $('cfg-dlg').getBoundingClientRect();
+  if (e.target === $('cfg-dlg') && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) toggleSettings(false);
+});
 async function takeControl() { const r = await post('/api/take-control', {}); if (r.error) showError(r.error); }
 function cancelForce() { $('force-confirm').hidden = true; $('force-btns').hidden = false; }
 
