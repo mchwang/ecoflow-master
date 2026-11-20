@@ -52,6 +52,16 @@ class Base(unittest.TestCase):
         return [b["forceCharge"] for b in server.demo["batteries"]]
 
 
+class Profiles(unittest.TestCase):
+    def test_solar_profile_matches_the_connected_dpus(self):
+        p1, p2 = {9: 1.0, 10: 2.0}, {10: 0.5}
+        self.assertEqual(server.combined_profile({1: {}, 2: {}}, p1, p2), {10: 2.5})   # two DPUs: hours both learned
+        self.assertEqual(server.combined_profile({1: {}}, p1, {}), p1)                # one DPU: its own profile
+        self.assertEqual(server.combined_profile({2: {}}, {}, p2), p2)                # one DPU in slot 2
+        self.assertEqual(server.combined_profile({1: {}, 2: {}, 3: {}}, p1, p2), {})  # DPU 3 not recorded: combined fit
+        self.assertEqual(server.combined_profile({}, p1, p2), {})
+
+
 class Commands(Base):
     def test_auto_and_in_control_charges(self):
         server.tick(at(6))

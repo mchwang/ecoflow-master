@@ -209,6 +209,16 @@ def dpu_profiles(now, max_soc, until_ts=2**62):
             fit_hourly_kw([(h, s2, g, c2) for h, _, s2, _, c2, g in rows], max_soc))
 
 
+def combined_profile(slots, p1, p2):
+    """Whole-system solar kW per hour from the per-DPU profiles, for the DPUs actually connected.
+    Only slots 1 and 2 are recorded, so with a third DPU its solar would be missing: use the combined fit then."""
+    learned = {1: p1, 2: p2}
+    if not slots or any(n not in learned for n in slots):
+        return {}
+    hours = set.intersection(*(set(learned[n]) for n in slots))  # hours every connected DPU has learned
+    return {h: sum(learned[n][h] for n in slots) for h in hours}
+
+
 def load_profile(now, min_n=20):
     """Usual home load (W) per hour of day over the last HISTORY_DAYS; hours with fewer readings are left out."""
     acc = {}
@@ -629,7 +639,7 @@ def tick(now=None):
         c["sun_after_wh"] = afternoon_sun(now, c, hourly)
         c["min_soc"], c["target_why"] = target_soc(c, c["sun_after_wh"])
         p1, p2 = dpu_profiles(now, c["max_soc"])
-        profile = {h: p1[h] + p2[h] for h in p1.keys() & p2.keys()}  # hours both DPUs have learned
+        profile = combined_profile(b, p1, p2)
         fallback_kw = c["pv_kw"] * c["pv_pr"]
         c["profile_hours"] = [len(p1), len(p2)]
         if profile:
