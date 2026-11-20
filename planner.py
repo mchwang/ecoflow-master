@@ -218,12 +218,6 @@ def hourly_kwh(rows, max_gap_s=300):
     return out
 
 
-
-
-def price_at(dt):
-    return tou_period(dt)[2]
-
-
 def day_report(rows, cap_wh, max_gap_s=300):
     """One day's energy and money from the minute readings.
 

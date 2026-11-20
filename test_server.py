@@ -566,6 +566,19 @@ class Http(HttpServer):
         self.assertIn("EcoFlow down", server.state["error"])
 
 
+class ConfigFile(Base):
+    def test_interrupted_save_keeps_the_old_settings(self):  # audit: write_text empties the file before writing
+        server.save_cfg()
+
+        def killed_mid_write(path, *a, **k):  # the file is opened (emptied), then the process dies
+            open(path, "w").close()
+            raise OSError("killed")
+        server.cfg["min_soc"] = 70
+        with mock.patch.object(Path, "write_text", killed_mid_write), self.assertRaises(OSError):
+            server.save_cfg()
+        self.assertEqual(json.loads(server.CONFIG_FILE.read_text())["min_soc"], 60)
+
+
 class SignIn(HttpServer):
     def setUp(self):
         super().setUp()
@@ -613,6 +626,23 @@ class SignIn(HttpServer):
         self.assertEqual(self.req("GET", "/api/state", headers={"Cookie": session})[0], 200)
         tampered = session[:-1] + ("1" if session[-1] == "0" else "0")  # always differs from the real signature
         self.assertEqual(self.req("GET", "/api/state", headers={"Cookie": tampered})[0], 401)
+
+    def test_non_ascii_password_signs_in(self):  # audit: compare_digest raised TypeError on "ä"
+        server.PASSWORD = "pässwörd"
+        self.assertEqual(self.login(urllib.parse.quote("pässwörd"))[0], 303)
+        self.assertEqual(self.login("nope")[0], 401)
+        self.assertTrue(server.authorized("Basic " + server.base64.b64encode("mch:pässwörd".encode()).decode()))
+
+    def test_no_password_refuses_requests_through_a_proxy(self):  # audit: 127.0.0.1 behind Caddy/nginx was open
+        server.PASSWORD = ""
+        self.assertEqual(self.req("GET", "/api/state")[0], 200)                                     # same machine
+        for proxy in ({"X-Forwarded-For": "1.2.3.4"}, {"Forwarded": "for=1.2.3.4"}, {"X-Real-IP": "1.2.3.4"}):  # review
+            self.assertEqual(self.req("GET", "/api/state", headers=proxy)[0], 401, proxy)
+        self.assertEqual(self.req("POST", "/api/force", '{"on": true}', {"Content-Type": "application/json",
+                                                                         "X-Forwarded-For": "1.2.3.4"})[0], 401)
+        with mock.patch.object(server.time, "sleep") as sleep:  # review: said "wrong password" when none is set
+            code, _, body = self.login("", {"X-Forwarded-For": "1.2.3.4"})
+        self.assertEqual(code, 401); self.assertIn("DASHBOARD_PASSWORD", body); sleep.assert_not_called()
 
     def test_expired_or_old_password_session_rejected(self):
         old = "hp_session=" + server.make_session(now=time.time() - 400 * 86400)
