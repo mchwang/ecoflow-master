@@ -387,6 +387,7 @@ class RatePlan(unittest.TestCase):
         self.assertEqual(decide(la(27, 20, 30), 30, {**CFG, **charge_window(la(27, 20, 30))}, 0)["kind"], "outside")
         self.assertTrue(charge_window(la(27, 21, 30))["open"])                       # Friday 9:30 PM: Saturday's window
         self.assertEqual(deadline_of(la(27, 21, 30), {**CFG, **charge_window(la(27, 21, 30))}), la(28, 17))
+        self.assertEqual(next_window(la(28, 17)), la(28, 20))                         # Saturday's own start, not Friday's 9 PM
         # Sunday 8 PM is cheap by Sunday's hours, though Monday's would call it on-peak
         self.assertEqual(charge_window(la(29, 20, 30)), {"offpeak_start": "20:00", "offpeak_end": "16:00", "open": True})
         self.assertEqual(deadline_of(la(29, 20, 30), {**CFG, **charge_window(la(29, 20, 30))}), la(30, 16))

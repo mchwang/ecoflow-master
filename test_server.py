@@ -248,6 +248,14 @@ class Commands(Base):
         self.assertEqual(self.reserves(), [])                   # never held
         self.assertIn("solar", server.state["decision"]["battery"]["why"])
 
+    def test_weekend_morning_uses_the_weekend_window(self):
+        server.planner.PLAN = server.planner.load_plan(SDGE)
+        with mock.patch.object(server, "get_weather", return_value=None):
+            server.tick(at(10, day=7))                          # Saturday 10 AM: inside the 12 AM-2 PM weekend window
+        d = server.state["decision"]
+        self.assertEqual((d["effective"]["offpeak_end"], d["effective"]["open"]), ("14:00", True))
+        self.assertNotEqual(d["kind"], "outside")
+
     def test_hold_mode_dry_run_logs_but_still_grid_charges(self):
         server.cfg["hold_mode"] = "dry-run"                     # the default until holding is safe on the panel
         server.tick(at(6))
