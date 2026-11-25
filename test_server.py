@@ -19,6 +19,7 @@ from unittest import mock
 os.environ.setdefault("DATA_DIR", tempfile.mkdtemp())
 import server  # noqa: E402
 from db import DB  # noqa: E402
+from test_planner import SDGE  # noqa: E402
 
 TZ = server.TZ
 
@@ -236,6 +237,24 @@ class Commands(Base):
             server.tick(at(8))
         self.assertEqual(self.reserves(), [])                   # never held
         self.assertIn("solar", server.state["decision"]["battery"]["why"])
+
+    def test_second_off_peak_block_releases_when_holding_would_waste_solar(self):
+        server.planner.PLAN = server.planner.load_plan(SDGE)
+        server.cfg.update(pv_kw=40.0, pv_pr=1.0, lat=1.0)       # a huge array: holding 10 AM-2 PM would overflow
+        sunny = {"hourly": [(at(h, day=4), 900, 0) for h in range(7, 18)], "sunrise": "06:38", "sunset": "17:04"}
+        with mock.patch.object(server, "get_weather", return_value=sunny):
+            server.tick(at(11, day=4))                          # Wednesday 11 AM: off-peak, but past the 6 AM deadline
+        self.assertEqual(server.state["decision"]["period"], "off-peak")
+        self.assertEqual(self.reserves(), [])                   # never held
+        self.assertIn("solar", server.state["decision"]["battery"]["why"])
+
+    def test_weekend_morning_uses_the_weekend_window(self):
+        server.planner.PLAN = server.planner.load_plan(SDGE)
+        with mock.patch.object(server, "get_weather", return_value=None):
+            server.tick(at(10, day=7))                          # Saturday 10 AM: inside the 12 AM-2 PM weekend window
+        d = server.state["decision"]
+        self.assertEqual((d["effective"]["offpeak_end"], d["effective"]["open"]), ("14:00", True))
+        self.assertNotEqual(d["kind"], "outside")
 
     def test_hold_mode_dry_run_logs_but_still_grid_charges(self):
         server.cfg["hold_mode"] = "dry-run"                     # the default until holding is safe on the panel
