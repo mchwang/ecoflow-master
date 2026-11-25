@@ -30,13 +30,15 @@ def load_plan(plan):
     months = plan.get("summer_months", [])
     if not isinstance(months, list) or any(m not in range(1, 13) for m in months):
         bad('"summer_months" must be a list of month numbers 1-12')
+    def iso_day(x):  # a real "YYYY-MM-DD" or "MM-DD" (2000: a leap year, so "02-29" is fine), not a week date like "2026-W52-5"
+        y = x if len(x) == 10 else f"2000-{x}"
+        return date.fromisoformat(y).isoformat() == y
     hol = plan.get("holidays", [])
     try:
-        assert isinstance(hol, list)
-        for x in hol:
-            y = x if len(x) == 10 else f"2000-{x}"  # 2000: a leap year, so "02-29" is fine
-            assert date.fromisoformat(y).isoformat() == y  # not a week date like "2026-W52-5"
+        ok = isinstance(hol, list) and all(iso_day(x) for x in hol)
     except Exception:
+        ok = False
+    if not ok:
         bad('"holidays" must be a list of dates like "2026-12-25", or "12-25" for every year')
     week = _day_hours(plan.get("hours"), bad)
     weekend = _day_hours(plan["weekend_hours"], bad, "weekend_hours") if "weekend_hours" in plan else week
