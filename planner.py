@@ -98,7 +98,9 @@ def _off(t):
 
 def _run(last):
     """[start, end) of the off-peak hours around the hour starting at `last`, walking the real calendar
-    (so Friday evening uses Friday's hours and Saturday morning Saturday's); at most 23 h long."""
+    (so Friday evening uses Friday's hours and Saturday morning Saturday's); at most 23 h long.
+    shortcut: a run longer than 23 h loses its earliest hours (they stay off-peak, but closed to grid charging); upgrade
+    if a plan with a day of nearly all off-peak next to a mostly off-peak day needs them."""
     hour, start = timedelta(hours=1), last
     end = last + hour
     while _off(end) and end - start < 23 * hour:
@@ -108,15 +110,21 @@ def _run(last):
     return start, end
 
 
-def _window_at(now):
-    """(start, end) of the cheap window now is in, else of the next one. Each day's window is the one its own
-    hours give (the longest off-peak run), anchored on the hour it ends; its start can be the evening before."""
+def _runs(now):
+    """The cheap windows of yesterday through 2 days ahead. Each day's window is the one its own hours give
+    (the longest off-peak run), anchored on the hour it ends; its start can be the evening before."""
     day = now.replace(hour=0, minute=0, second=0, microsecond=0)
     runs = []
     for k in range(-1, 3):
         d = day + timedelta(days=k)
         end = int(PLAN["window_weekend" if _weekend(d) else "window"]["offpeak_end"][:2])
         runs.append(_run(d.replace(hour=(end - 1) % 24)))  # its last cheap hour (end 00:00 = 11 PM)
+    return runs
+
+
+def _window_at(now):
+    """(start, end) of the cheap window now is in, else of the next one."""
+    runs = _runs(now)
     return next((r for r in runs if r[0] <= now < r[1]), None) or min(r for r in runs if r[0] > now)
 
 
@@ -159,7 +167,11 @@ def tou_period(now):
 
 
 def deadline_of(now, cfg):
-    """End of the cheap window now is in: today's, or tomorrow's when the window crosses midnight and it's evening."""
+    """End of the cheap window now is in: today's, or tomorrow's when the window crosses midnight and it's evening.
+    Outside the window ("open" False), the end of the last one, as the weekday-only code gave (not Friday's
+    hours pinned on Saturday's window)."""
+    if cfg.get("open") is False:
+        return max(end for _, end in _runs(now) if end <= now)
     end = datetime.combine(now.date(), time.fromisoformat(cfg["offpeak_end"]), now.tzinfo)
     start = time.fromisoformat(cfg["offpeak_start"])
     return end + timedelta(days=1) if start > end.time() and now.time() >= start else end

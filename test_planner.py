@@ -391,6 +391,11 @@ class RatePlan(unittest.TestCase):
         self.assertEqual(charge_window(la(29, 20, 30)), {"offpeak_start": "20:00", "offpeak_end": "16:00", "open": True})
         self.assertEqual(deadline_of(la(29, 20, 30), {**CFG, **charge_window(la(29, 20, 30))}), la(30, 16))
 
+    def test_deadline_outside_the_window_is_the_last_one_that_ended(self):
+        self.use(SDGE)  # Friday's next window is Saturday's 12 AM-2 PM, but the deadline must not become Friday 2 PM
+        for day in (25, 27):                                                          # Wednesday, Friday
+            self.assertEqual(deadline_of(la(day, 11), {**CFG, **charge_window(la(day, 11))}), la(day, 6))
+
     def test_holidays_use_weekend_hours(self):
         self.use({**SDGE, "holidays": ["2026-11-26", "12-25"]})                      # Thanksgiving, Christmas every year
         thu = la(26, 8)
