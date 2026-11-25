@@ -598,7 +598,9 @@ async function refresh() {
     const end = t12(e.offpeak_end), sol = d.solarKwh > 0 ? `Solar adds about ${d.solarKwh} kWh while the house uses about ${d.homeKwh} kWh`
       : known ? `No solar is expected before ${end}` : `Solar isn't counted yet (the array size is still being learned)`;
     const [title, why] = {
-      outside: ['No grid charging now', `Power costs more until ${t12(e.offpeak_start)}. It only grid-charges from ${t12(e.offpeak_start)} to ${end}.`],
+      outside: ['No grid charging now', d.period === 'off-peak'  // a second cheap block, e.g. SDG&E weekdays 10 AM-2 PM
+        ? `Power is cheap now, but grid charging waits for the main cheap window, ${t12(e.offpeak_start)} to ${end}.`
+        : `Power costs more until ${t12(e.offpeak_start)}. It only grid-charges from ${t12(e.offpeak_start)} to ${end}.`],
       ok: ['On track, no grid charge needed', `${sol}, so the battery should reach ${d.projectedSoc}% by ${end}. Target is ${e.min_soc}% (${e.target_why}).`],
       planned: [`Grid charge at ${d.startAt ? t12(d.startAt) : '–'}`, `${sol}, so the battery would only reach ${d.projectedSoc}% by ${end}. It needs ${e.min_soc}% (${e.target_why}).`],
       outage: ['Grid outage: on battery', `The panel switched the house to the battery. Backup time is shown at the top; no grid charging until the grid returns.`],

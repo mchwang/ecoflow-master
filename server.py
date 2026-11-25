@@ -25,7 +25,7 @@ from pathlib import Path
 from db import DB
 from ecoflow_api import SSL_CTX, EcoFlow
 import planner
-from planner import afternoon_sun, charge_window, evening_target, balance, hold_battery, daily_solar_kwh, day_report, deadline_of, decide, hourly_kwh, room_target, simulate, target_soc, hm12, fit_array_kw, fit_hourly_kw, solar_wh, solar_wh_hourly, tou_period
+from planner import afternoon_sun, charge_window, evening_target, balance, hold_battery, daily_solar_kwh, day_report, deadline_of, decide, hourly_kwh, next_window, offpeak_end, room_target, simulate, target_soc, hm12, fit_array_kw, fit_hourly_kw, solar_wh, solar_wh_hourly, tou_period
 
 HERE = Path(__file__).parent
 HISTORY_DAYS = 14
@@ -263,14 +263,14 @@ def save_cfg():
 
 def plan_source():
     """The current rate plan as written in its file (without the fields load_plan derives)."""
-    return {k: v for k, v in planner.PLAN.items() if k not in ("tz", "by_hour", "window")}
+    return {k: v for k, v in planner.PLAN.items() if k not in planner.DERIVED}
 
 
 def save_plan(plan):
     """Write a checked plan (load_plan's result) to PLAN_FILE and switch to it, time zone included."""
     global TZ
     tmp = PLAN_FILE.with_name(f"{PLAN_FILE.name}.{threading.get_ident()}.tmp")
-    tmp.write_text(json.dumps({k: v for k, v in plan.items() if k not in ("tz", "by_hour", "window")}, indent=2))
+    tmp.write_text(json.dumps({k: v for k, v in plan.items() if k not in planner.DERIVED}, indent=2))
     os.replace(tmp, PLAN_FILE)
     planner.PLAN, TZ = plan, plan["tz"]
     weather["key"] = None  # forecast hours are fetched in the plan's time zone
@@ -333,8 +333,8 @@ def summarize(d):
     }
 
 
-def effective(s):
-    c = {**cfg, **charge_window(), "plan": planner.PLAN["name"]}
+def effective(s, now=None):
+    c = {**cfg, **charge_window(now), "plan": planner.PLAN["name"]}
     c["capacity_wh"] = c["capacity_wh"] or s["fullCapWh"] or DPU_WH * max(1, len(s["batteries"]))
     c["charge_w"] = c["charge_w"] or s["chargeWattPower"] or 3000
     c["max_soc"] = s["maxChargeSoc"] or 100  # panel stops charging at its max level (target_soc caps to it)
@@ -643,7 +643,7 @@ def tick(now=None):
     w = get_weather()
     leader = update_control(s)
     with lock:
-        c = effective(s)
+        c = effective(s, now)
         deadline = deadline_of(now, c)
         hourly = [(t, ghi or 0) for t, ghi, _ in w["hourly"]] if w else []
         ghi_now = next((g for t, g in hourly if t - timedelta(hours=1) <= now < t), 0)
@@ -672,8 +672,7 @@ def tick(now=None):
         model = (hourly, profile, fallback_kw, loads, load_now, c["capacity_wh"], floor, c["max_soc"])
         if loads:  # without a learned load the fixed target stays (one live reading is too noisy for the evening)
             want = c["min_soc"]
-            until = datetime.combine(deadline.date(), datetime.strptime(c["offpeak_start"], "%H:%M").time(), TZ)  # next cheap window
-            until += timedelta(days=1) if until <= deadline else timedelta()
+            until = next_window(deadline)
             c["min_soc"], need = evening_target(want, deadline, *model, until=until)
             if c["min_soc"] < want:
                 c["target_why"] += f"; lowered to the evening's need ({need:.0f}% until {'midnight' if until.hour == until.minute == 0 else hm12(until)})"
@@ -683,7 +682,10 @@ def tick(now=None):
             c["target_why"] += f"; lowered so {room:.0f}% of afternoon sun fits"
         period, season, price = tou_period(now)
         held_sim = simulate(now, deadline, s["soc"], hourly, profile, fallback_kw, {}, 0, c["capacity_wh"], floor, c["max_soc"])
-        hold, hold_why = hold_battery(period, bool(s["gridOnline"]), held_sim["wasted_wh"] / 1000, cfg["reserve_held"] is not None)
+        held_waste = held_sim["wasted_wh"]
+        if not c["open"]:  # off-peak outside the cheap window (SDG&E weekdays 10 AM-2 PM): look to the end of these hours
+            held_waste = simulate(now, offpeak_end(now), s["soc"], hourly, profile, fallback_kw, {}, 0, c["capacity_wh"], floor, c["max_soc"])["wasted_wh"]
+        hold, hold_why = hold_battery(period, bool(s["gridOnline"]), held_waste / 1000, cfg["reserve_held"] is not None)
         held_now = hold and cfg["hold_mode"] == "auto"  # only plan on a hold we actually send
         sim = held_sim if held_now else simulate(now, deadline, s["soc"], *model)  # held: house on grid until the deadline
         c["load_hours"] = len(loads)

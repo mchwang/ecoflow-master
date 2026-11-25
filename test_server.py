@@ -19,6 +19,7 @@ from unittest import mock
 os.environ.setdefault("DATA_DIR", tempfile.mkdtemp())
 import server  # noqa: E402
 from db import DB  # noqa: E402
+from test_planner import SDGE  # noqa: E402
 
 TZ = server.TZ
 
@@ -234,6 +235,16 @@ class Commands(Base):
         sunny = {"hourly": [(at(h), 900, 0) for h in range(7, 18)], "sunrise": "06:38", "sunset": "17:04"}
         with mock.patch.object(server, "get_weather", return_value=sunny):
             server.tick(at(8))
+        self.assertEqual(self.reserves(), [])                   # never held
+        self.assertIn("solar", server.state["decision"]["battery"]["why"])
+
+    def test_second_off_peak_block_releases_when_holding_would_waste_solar(self):
+        server.planner.PLAN = server.planner.load_plan(SDGE)    # at(11) is a Friday: weekday hours
+        server.cfg.update(pv_kw=40.0, pv_pr=1.0, lat=1.0)       # a huge array: holding 10 AM-2 PM would overflow
+        sunny = {"hourly": [(at(h), 900, 0) for h in range(7, 18)], "sunrise": "06:38", "sunset": "17:04"}
+        with mock.patch.object(server, "get_weather", return_value=sunny):
+            server.tick(at(11))                                 # Friday 11 AM: off-peak, but past the 6 AM deadline
+        self.assertEqual(server.state["decision"]["period"], "off-peak")
         self.assertEqual(self.reserves(), [])                   # never held
         self.assertIn("solar", server.state["decision"]["battery"]["why"])
 

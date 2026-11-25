@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 
 import planner
 from ecoflow_api import sign
-from planner import afternoon_sun, charge_window, deadline_of, load_plan, evening_target, balance, hold_battery, daily_solar_kwh, day_report, decide, fit_hourly_kw, hourly_kwh, room_target, simulate, solar_wh_hourly, target_soc, fit_array_kw, hm12, solar_wh, tou_period
+from planner import afternoon_sun, charge_window, deadline_of, load_plan, evening_target, balance, hold_battery, daily_solar_kwh, day_report, decide, fit_hourly_kw, hourly_kwh, room_target, simulate, solar_wh_hourly, target_soc, fit_array_kw, hm12, solar_wh, tou_period, next_window, offpeak_end
 
 TZ = ZoneInfo("America/Los_Angeles")
 CFG = {"capacity_wh": 30720, "charge_w": 4000, "min_soc": 60, "max_soc": 95,
@@ -322,6 +322,17 @@ EVENING = {"name": "Test evening peak", "timezone": "America/New_York", "summer_
            "hours": {"on-peak": [[16, 21]]}, "prices": {"winter": {"off-peak": 0.10, "on-peak": 0.40}}}
 
 
+# SDG&E-style: weekdays super off-peak 0-6 and 10-14, weekends 0-14 ("off-peak" = the unlisted, cheapest hours)
+SDGE = {"name": "SDG&E test", "timezone": "America/Los_Angeles", "summer_months": [],
+        "hours": {"mid": [[6, 10], [14, 16], [21, 24]], "peak": [[16, 21]]},
+        "weekend_hours": {"mid": [[14, 16], [21, 24]], "peak": [[16, 21]]},
+        "prices": {"winter": {"off-peak": 0.1, "mid": 0.3, "peak": 0.5}}}
+
+
+def la(day, h, m=0):  # November 2026 in Los Angeles: 25 = Wednesday, 27 = Friday, 28 = Saturday
+    return datetime(2026, 11, day, h, m, tzinfo=ZoneInfo("America/Los_Angeles"))
+
+
 class RatePlan(unittest.TestCase):
     def use(self, plan):
         old = planner.PLAN
@@ -351,11 +362,62 @@ class RatePlan(unittest.TestCase):
         self.use(two)
         self.assertEqual(charge_window(), {"offpeak_start": "20:00", "offpeak_end": "07:00"})  # 11 h beats 9-17 (8 h)
 
+    def test_weekend_hours(self):
+        self.use(SDGE)
+        wed, sat = la(25, 8), la(28, 8)
+        self.assertEqual(charge_window(wed), {"offpeak_start": "00:00", "offpeak_end": "06:00", "open": False})
+        self.assertEqual(charge_window(sat), {"offpeak_start": "00:00", "offpeak_end": "14:00", "open": True})
+        self.assertEqual(tou_period(wed)[0], "mid")
+        self.assertEqual(tou_period(sat)[0], "off-peak")
+        self.assertEqual(decide(wed, 30, {**CFG, **charge_window(wed)}, 0)["kind"], "outside")
+        self.assertNotEqual(decide(sat, 30, {**CFG, **charge_window(sat)}, 0)["kind"], "outside")
+        self.assertEqual(next_window(la(27, 6)), la(28, 0))                         # Friday's window over: Saturday's
+        with self.assertRaisesRegex(ValueError, "weekend_hours"):
+            load_plan({**SDGE, "weekend_hours": {"peak": [[16, 25]]}})
+
+    def test_second_off_peak_block_ends_at_2pm(self):
+        self.use(SDGE)
+        self.assertEqual(offpeak_end(la(25, 11, 30)), la(25, 14))                    # weekday 10 AM-2 PM block
+        self.assertEqual(offpeak_end(la(25, 17)), la(25, 17))                        # peak: not off-peak at all
+
+    def test_window_across_midnight_uses_each_days_own_hours(self):
+        self.use({**EVENING, "timezone": "America/Los_Angeles", "weekend_hours": {"on-peak": [[17, 20]]}})
+        # Friday 8 PM is still on-peak by Friday's hours (4-9 PM), though Saturday's would make it cheap
+        self.assertEqual(charge_window(la(27, 20, 30)), {"offpeak_start": "21:00", "offpeak_end": "17:00", "open": False})
+        self.assertEqual(decide(la(27, 20, 30), 30, {**CFG, **charge_window(la(27, 20, 30))}, 0)["kind"], "outside")
+        self.assertTrue(charge_window(la(27, 21, 30))["open"])                       # Friday 9:30 PM: Saturday's window
+        self.assertEqual(deadline_of(la(27, 21, 30), {**CFG, **charge_window(la(27, 21, 30))}), la(28, 17))
+        # Sunday 8 PM is cheap by Sunday's hours, though Monday's would call it on-peak
+        self.assertEqual(charge_window(la(29, 20, 30)), {"offpeak_start": "20:00", "offpeak_end": "16:00", "open": True})
+        self.assertEqual(deadline_of(la(29, 20, 30), {**CFG, **charge_window(la(29, 20, 30))}), la(30, 16))
+
+    def test_holidays_use_weekend_hours(self):
+        self.use({**SDGE, "holidays": ["2026-11-26", "12-25"]})                      # Thanksgiving, Christmas every year
+        thu = la(26, 8)
+        self.assertEqual(charge_window(thu), {"offpeak_start": "00:00", "offpeak_end": "14:00", "open": True})
+        self.assertEqual(tou_period(thu)[0], "off-peak")
+        self.assertEqual(tou_period(datetime(2027, 12, 25, 8, tzinfo=thu.tzinfo))[0], "off-peak")
+        self.assertEqual(tou_period(datetime(2027, 11, 26, 8, tzinfo=thu.tzinfo))[0], "mid")  # dated: that year only
+        for bad in (["2026-13-01"], "12-25", [1225]):
+            with self.assertRaisesRegex(ValueError, "holidays"):
+                load_plan({**SDGE, "holidays": bad})
+
+    def test_plan_without_weekend_hours_is_unchanged(self):
+        for day in range(23, 30):                                                     # every day of a week
+            self.assertEqual(charge_window(la(day, 17)), {"offpeak_start": "00:00", "offpeak_end": "15:00", "open": False})
+            self.assertEqual(charge_window(la(day, 9)), {"offpeak_start": "00:00", "offpeak_end": "15:00", "open": True})
+            self.assertEqual(tou_period(la(day, 17))[0], "peak")
+
     def test_day_report_uses_the_plans_periods(self):
         self.use(EVENING)
         r = day_report([(at(17), 50, 1000, 1000, 0), (at(18), 50, 1000, 1000, 0)], 10000, max_gap_s=3600)
         self.assertEqual(list(r["grid_kwh"]), ["off-peak", "on-peak"])               # cheapest first
         self.assertAlmostEqual(r["grid_kwh"]["on-peak"], 1.0); self.assertAlmostEqual(r["grid_cost"], 0.40)
+
+    def test_day_report_counts_a_weekend_only_period(self):
+        self.use({**SDGE, "weekend_hours": {"weekend-peak": [[16, 21]]}, "prices": {"winter": {**SDGE["prices"]["winter"], "weekend-peak": 0.6}}})
+        r = day_report([(la(28, 17), 50, 1000, 1000, 0), (la(28, 18), 50, 1000, 1000, 0)], 10000, max_gap_s=3600)  # Saturday
+        self.assertAlmostEqual(r["grid_kwh"]["weekend-peak"], 1.0); self.assertAlmostEqual(r["grid_cost"], 0.60)
 
     def test_bad_plans_say_what_is_wrong(self):
         cases = {

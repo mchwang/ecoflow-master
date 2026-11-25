@@ -5,7 +5,7 @@ file named by RATE_PLAN (see load_plan). The cheap window is the plan's longest 
 the deadline. Solar expected before the deadline (from the weather forecast) counts toward the minimum.
 """
 import json
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -14,8 +14,10 @@ def load_plan(plan):
 
     {"name": str, "timezone": IANA name, "summer_months": [1-12...] (may be empty),
      "hours": {period: [[start_hour, end_hour), ...]}  # whole hours 0-24; every hour not listed is "off-peak"
+     "weekend_hours": {...}  # optional, same shape, for Saturday and Sunday; without it weekends use "hours"
+     "holidays": ["2026-12-25", "07-04", ...]  # optional, days that use weekend_hours ("MM-DD" = every year)
      "prices": {"summer": {period: $/kWh}, "winter": {...}}}  # every period plus "off-peak"; summer only if used
-    shortcut: same hours every day and all year (no weekends/holidays, no seasonal hours); upgrade when a user needs it.
+    shortcut: no seasonal hours, and holidays are listed by date (no 4th-Thursday rules); upgrade when a user needs it.
     """
     def bad(msg):
         raise ValueError(f"rate plan {plan.get('name', '?') if isinstance(plan, dict) else '?'}: {msg}")
@@ -28,25 +30,42 @@ def load_plan(plan):
     months = plan.get("summer_months", [])
     if not isinstance(months, list) or any(m not in range(1, 13) for m in months):
         bad('"summer_months" must be a list of month numbers 1-12')
-    by_hour = ["off-peak"] * 24
-    for name, ranges in (plan.get("hours") or {}).items():
-        if name == "off-peak":
-            bad('"hours" lists only the expensive periods; every hour not listed is off-peak')
-        for r in ranges if isinstance(ranges, list) else [None]:
-            if not (isinstance(r, list) and len(r) == 2 and all(isinstance(x, int) for x in r) and 0 <= r[0] < r[1] <= 24):
-                bad(f'"hours" for {name}: {r!r} is not [start_hour, end_hour] with 0 <= start < end <= 24')
-            for h in range(*r):
-                if by_hour[h] != "off-peak":
-                    bad(f"hour {h} is in both {by_hour[h]} and {name}")
-                by_hour[h] = name
-    off = [by_hour[h] == "off-peak" for h in range(24)]
-    if all(off) or not any(off):
-        bad("needs some off-peak hours and some more expensive ones (a flat rate has nothing to time)")
+    hol = plan.get("holidays", [])
+    try:
+        assert isinstance(hol, list)
+        for x in hol:
+            date.fromisoformat(x if len(x) == 10 else f"2000-{x}")  # 2000: a leap year, so "02-29" is fine
+    except Exception:
+        bad('"holidays" must be a list of dates like "2026-12-25", or "12-25" for every year')
+    week = _day_hours(plan.get("hours"), bad)
+    weekend = _day_hours(plan["weekend_hours"], bad, "weekend_hours") if "weekend_hours" in plan else week
     for season in ("summer", "winter") if months else ("winter",):
-        for period in set(by_hour):
+        for period in set(week[0] + weekend[0]):
             price = (plan.get("prices") or {}).get(season, {}).get(period)
             if not isinstance(price, (int, float)) or price < 0:
                 bad(f'"prices" needs a $/kWh number for {season} {period}')
+    return {**plan, "tz": tz, "by_hour": week[0], "window": week[1], "by_hour_weekend": weekend[0], "window_weekend": weekend[1]}
+
+
+DERIVED = ("tz", "by_hour", "window", "by_hour_weekend", "window_weekend")  # added by load_plan, not in the file
+
+
+def _day_hours(hours, bad, key="hours"):
+    """One day's {period: [[start, end), ...]} -> (period of each hour 0-23, cheap window)."""
+    by_hour = ["off-peak"] * 24
+    for name, ranges in (hours or {}).items():
+        if name == "off-peak":
+            bad(f'"{key}" lists only the expensive periods; every hour not listed is off-peak')
+        for r in ranges if isinstance(ranges, list) else [None]:
+            if not (isinstance(r, list) and len(r) == 2 and all(isinstance(x, int) for x in r) and 0 <= r[0] < r[1] <= 24):
+                bad(f'"{key}" for {name}: {r!r} is not [start_hour, end_hour] with 0 <= start < end <= 24')
+            for h in range(*r):
+                if by_hour[h] != "off-peak":
+                    bad(f'"{key}": hour {h} is in both {by_hour[h]} and {name}')
+                by_hour[h] = name
+    off = [by_hour[h] == "off-peak" for h in range(24)]
+    if all(off) or not any(off):
+        bad(f'"{key}" needs some off-peak hours and some more expensive ones (a flat rate has nothing to time)')
     # cheap window = longest run of off-peak hours, wrapping past midnight (e.g. 21:00-16:00)
     best = (0, 0)
     for start in range(24):
@@ -54,8 +73,7 @@ def load_plan(plan):
             n = next(k for k in range(1, 25) if not off[(start + k) % 24])
             best = max(best, (n, -start))
     n, start = best[0], -best[1]
-    return {**plan, "tz": tz, "by_hour": by_hour,
-            "window": {"offpeak_start": f"{start:02d}:00", "offpeak_end": f"{(start + n) % 24:02d}:00"}}
+    return by_hour, {"offpeak_start": f"{start:02d}:00", "offpeak_end": f"{(start + n) % 24:02d}:00"}
 
 
 PLAN = load_plan(json.loads((Path(__file__).parent / "rates" / "pge-ev2a.json").read_text()))
@@ -67,9 +85,60 @@ def use_plan(path):
     PLAN = load_plan(json.loads(Path(path).read_text()))
 
 
-def charge_window():
-    """{"offpeak_start", "offpeak_end"} "HH:MM" of the current plan's cheap window (end = the deadline)."""
-    return dict(PLAN["window"])
+def _weekend(d):
+    """Weekend hours apply on Saturday, Sunday and the plan's holidays."""
+    hol = PLAN.get("holidays", [])
+    return d.weekday() >= 5 or f"{d:%Y-%m-%d}" in hol or f"{d:%m-%d}" in hol
+
+
+def _off(t):
+    """Is the hour t is in off-peak, by that day's own hours?"""
+    return PLAN["by_hour_weekend" if _weekend(t) else "by_hour"][t.hour] == "off-peak"
+
+
+def _run(last):
+    """[start, end) of the off-peak hours around the hour starting at `last`, walking the real calendar
+    (so Friday evening uses Friday's hours and Saturday morning Saturday's); at most 23 h long."""
+    hour, start = timedelta(hours=1), last
+    end = last + hour
+    while _off(end) and end - start < 23 * hour:
+        end += hour
+    while _off(start - hour) and end - start < 23 * hour:
+        start -= hour
+    return start, end
+
+
+def _window_at(now):
+    """(start, end) of the cheap window now is in, else of the next one. Each day's window is the one its own
+    hours give (the longest off-peak run), anchored on the hour it ends; its start can be the evening before."""
+    day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    runs = []
+    for k in range(-1, 3):
+        d = day + timedelta(days=k)
+        end = int(PLAN["window_weekend" if _weekend(d) else "window"]["offpeak_end"][:2])
+        runs.append(_run(d.replace(hour=(end - 1) % 24)))  # its last cheap hour (end 00:00 = 11 PM)
+    return next((r for r in runs if r[0] <= now < r[1]), None) or min(r for r in runs if r[0] > now)
+
+
+def charge_window(now=None):
+    """{"offpeak_start", "offpeak_end"} "HH:MM" of the cheap window in effect at `now` (end = the deadline),
+    or of the next one, and "open": whether now is inside it; without `now`, the plain weekday window."""
+    if now is None:
+        return dict(PLAN["window"])
+    start, end = _window_at(now)
+    return {"offpeak_start": f"{start:%H:%M}", "offpeak_end": f"{end:%H:%M}", "open": start <= now < end}
+
+
+def next_window(t):
+    """Start of the first cheap window that begins after t."""
+    start, end = _window_at(t)
+    return start if start > t else _window_at(end)[0]
+
+
+def offpeak_end(now):
+    """End of the off-peak hours now is in (any off-peak block, e.g. SDG&E's 10 AM-2 PM, not only the cheap
+    window); now itself when it isn't off-peak."""
+    return _run(now.replace(minute=0, second=0, microsecond=0))[1] if _off(now) else now
 
 
 def in_window(t, cfg):
@@ -84,7 +153,7 @@ def hm12(t):
 
 
 def tou_period(now):
-    period = PLAN["by_hour"][now.hour]
+    period = PLAN["by_hour_weekend" if _weekend(now) else "by_hour"][now.hour]
     season = "summer" if now.month in PLAN.get("summer_months", []) else "winter"
     return period, season, PLAN["prices"][season][period]
 
@@ -201,7 +270,7 @@ def decide(now, soc, cfg, pv_wh=0.0, charging_by_us=False, projected=None):
     cap, min_soc = cfg["capacity_wh"], cfg["min_soc"]
     projected = min(cfg["max_soc"], soc + pv_wh / cap * 100) if projected is None else projected
     out = {"charge": False, "start_at": None, "projected_soc": round(projected, 1)}
-    if not in_window(now.time(), cfg):
+    if not cfg.get("open", in_window(now.time(), cfg)):  # "open": checked on the real calendar (charge_window)
         return {**out, "kind": "outside", "reason": f"Outside off-peak window ({hm12(cfg['offpeak_start'])}-{hm12(cfg['offpeak_end'])}); never grid-charge at high price"}
     solar = f"solar adds ~{pv_wh / 1000:.1f} kWh"
     # Keep charging 2% past the minimum once started, so a small forecast change doesn't flip it on and off.
@@ -297,7 +366,7 @@ def day_report(rows, cap_wh, max_gap_s=300):
     energy in (grid + solar + drawn from earlier charge) =
     home + stored + losses; balance_kwh is the raw losses figure (negative = the meters disagree a little).
     """
-    periods = sorted(set(PLAN["by_hour"]), key=lambda p: PLAN["prices"]["winter"][p])  # cheapest first, e.g. off-peak, part-peak, peak
+    periods = sorted(set(PLAN["by_hour"] + PLAN["by_hour_weekend"]), key=lambda p: PLAN["prices"]["winter"][p])  # cheapest first, e.g. off-peak, part-peak, peak
     grid_home, grid_batt, grid_usd = (dict.fromkeys(periods, 0.0) for _ in range(3))
     solar_home = solar_batt = batt_home = home = without = delta = 0.0
     off_price = 0.0
