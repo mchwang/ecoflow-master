@@ -397,6 +397,13 @@ class RatePlan(unittest.TestCase):
         for day in (25, 27):                                                          # Wednesday, Friday
             self.assertEqual(deadline_of(la(day, 11), {**CFG, **charge_window(la(day, 11))}), la(day, 6))
 
+    def test_bad_weekend_hours_and_holidays_name_the_problem(self):
+        for plan, msg in [({**SDGE, "weekend_hours": [[1, 2]]}, "weekend_hours.*object"),
+                          ({**SDGE, "weekend_hours": {}}, "weekends with no expensive hours"),
+                          ({**SDGE, "holidays": ["2026-W52-5"]}, "holidays")]:
+            with self.assertRaisesRegex(ValueError, msg):
+                load_plan(plan)
+
     def test_holidays_use_weekend_hours(self):
         self.use({**SDGE, "holidays": ["2026-11-26", "12-25"]})                      # Thanksgiving, Christmas every year
         thu = la(26, 8)

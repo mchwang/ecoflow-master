@@ -34,7 +34,8 @@ def load_plan(plan):
     try:
         assert isinstance(hol, list)
         for x in hol:
-            date.fromisoformat(x if len(x) == 10 else f"2000-{x}")  # 2000: a leap year, so "02-29" is fine
+            y = x if len(x) == 10 else f"2000-{x}"  # 2000: a leap year, so "02-29" is fine
+            assert date.fromisoformat(y).isoformat() == y  # not a week date like "2026-W52-5"
     except Exception:
         bad('"holidays" must be a list of dates like "2026-12-25", or "12-25" for every year')
     week = _day_hours(plan.get("hours"), bad)
@@ -52,6 +53,8 @@ DERIVED = ("tz", "by_hour", "window", "by_hour_weekend", "window_weekend")  # ad
 
 def _day_hours(hours, bad, key="hours"):
     """One day's {period: [[start, end), ...]} -> (period of each hour 0-23, cheap window)."""
+    if hours is not None and not isinstance(hours, dict):
+        bad(f'"{key}" must be an object like {{"peak": [[16, 21]]}}')
     by_hour = ["off-peak"] * 24
     for name, ranges in (hours or {}).items():
         if name == "off-peak":
@@ -65,7 +68,8 @@ def _day_hours(hours, bad, key="hours"):
                 by_hour[h] = name
     off = [by_hour[h] == "off-peak" for h in range(24)]
     if all(off) or not any(off):
-        bad(f'"{key}" needs some off-peak hours and some more expensive ones (a flat rate has nothing to time)')
+        bad(f'"{key}" needs some off-peak hours and some more expensive ones (a flat rate has nothing to time)'
+            + ('; weekends with no expensive hours are not supported yet, so leave "weekend_hours" out' if key == "weekend_hours" else ""))
     # cheap window = longest run of off-peak hours, wrapping past midnight (e.g. 21:00-16:00)
     best = (0, 0)
     for start in range(24):

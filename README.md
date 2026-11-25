@@ -76,13 +76,13 @@ The default is [`rates/pge-ev2a.json`](rates/pge-ev2a.json). You can also point 
 ```
 
 - **`hours`:** the expensive periods as `[start, end)` whole hours, 0-24, local time. Every hour you don't list is off-peak. Name the periods whatever your bill calls them.
-- **`weekend_hours`** (optional): the same as `hours`, for Saturday and Sunday. Leave it out if weekends are priced like weekdays. For SDG&E EV-TOU, for example: `"hours": { "mid-peak": [[6, 10], [14, 16], [21, 24]], "peak": [[16, 21]] }` and `"weekend_hours": { "mid-peak": [[14, 16], [21, 24]], "peak": [[16, 21]] }`. Here the cheapest hours are always called `off-peak`, so SDG&E's "super off-peak" is `off-peak` and its "off-peak" needs another name, such as `mid-peak`. The cheap window then is midnight-6 AM on weekdays and midnight-2 PM on weekends.
+- **`weekend_hours`** (optional): the same as `hours`, for Saturday and Sunday. Leave it out if weekends are priced like weekdays. For SDG&E EV-TOU, for example: `"hours": { "mid-peak": [[6, 10], [14, 16], [21, 24]], "peak": [[16, 21]] }` and `"weekend_hours": { "mid-peak": [[14, 16], [21, 24]], "peak": [[16, 21]] }`. Here the cheapest hours are always called `off-peak`, so SDG&E's "super off-peak" is `off-peak` and its "off-peak" needs another name, such as `mid-peak`. The cheap window then is midnight-6 AM on weekdays and midnight-2 PM on weekends. Check your own tariff: on some SDG&E plans the weekday 10 AM-2 PM super off-peak applies only in March and April, and since seasonal hours aren't supported, list it as `mid-peak` if that is yours.
 - **`holidays`** (optional): days priced like weekends, e.g. `["2026-11-26", "12-25"]`. A full date counts that year only; `"MM-DD"` counts every year. Holidays that move (Thanksgiving, Memorial Day) need their date each year. Without `weekend_hours`, holidays change nothing.
 - **`prices`:** $/kWh for each period plus `"off-peak"`, for `winter` and, if `summer_months` isn't empty, `summer`.
-- **The cheap window** is your longest run of off-peak hours, and it may cross midnight (with the plan above: 9 PM to 2 PM). The app grid-charges only inside it, aiming for the minimum level by the time it ends.
+- **The cheap window** is your longest run of off-peak hours, and it may cross midnight (with the example JSON above: 9 PM to 2 PM). The app grid-charges only inside it, aiming for the minimum level by the time it ends.
 - A mistake in the file stops the app at startup with a message naming the problem.
 - **Weekends and the cheap window:** each day's hours decide its own cheap window, and a window that crosses midnight follows the real calendar (Friday evening at Friday's prices, Saturday morning at Saturday's). Off-peak hours outside the cheap window, such as SDG&E's 10 AM-2 PM on weekdays, still run the house on grid power and keep the battery for the expensive hours, unless the sun would overflow it.
-- **Not supported yet:** hours that change by season, and grid-charging in a second cheap block on the same day.
+- **Not supported yet:** hours that change by season, weekends with no expensive hours at all, and grid-charging in a second cheap block on the same day.
 
 ## Run it all the time (Docker)
 
