@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.1 — 2026-11-25
+
+### Rate plan
+- Weekend hours: optional `"weekend_hours"` (same shape as `"hours"`) for Saturday and Sunday, e.g. SDG&E's cheap 0-14 on weekends.
+- Holidays: optional `"holidays"` list (`"YYYY-MM-DD"` for one year, `"MM-DD"` for every year), using the weekend hours.
+- Each day's own hours decide its cheap window; a window that crosses midnight follows the real calendar (Friday evening at Friday's prices, Saturday morning at Saturday's).
+- The evening target counts until the real start of the next cheap window.
+- In off-peak hours outside the cheap window (SDG&E weekdays 10 AM-2 PM), battery hold looks ahead to the end of those hours, and the Smart charge card says power is cheap now.
+- Not supported yet: hours that change by season; grid charging in a second cheap block on the same day.
+
 ## 0.5 — 2026-11-25
 
 First tagged release. Everything below is new.
@@ -31,7 +41,7 @@ First tagged release. Everything below is new.
 
 ### Rate plan
 - Any time-of-use plan as a JSON file (`RATE_PLAN`), or edited in Settings → Rate plan; the plan is checked before saving.
-- Supports weekend hours, holidays, summer/winter prices, and a cheap window that crosses midnight.
+- Supports summer/winter prices and a cheap window that crosses midnight.
 - Default plan: PG&E EV2-A.
 
 ### Dashboard
